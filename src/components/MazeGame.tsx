@@ -33,7 +33,7 @@ type GraphicsQuality = 'low' | 'medium' | 'high';
 type TimeOfDay = 'day' | 'night' | 'sunset' | 'dawn';
 type WeatherType = 'sunny' | 'cloudy' | 'rainy' | 'snowy';
 
-// Fixed PointerLockControls implementation
+// Fixed PointerLockControls implementation with better mouse handling
 class PointerLockControls {
   camera: THREE.Camera;
   domElement: HTMLElement;
@@ -42,6 +42,7 @@ class PointerLockControls {
   vec = new THREE.Vector3();
   minPolarAngle = 0;
   maxPolarAngle = Math.PI;
+  sensitivity = 0.002; // Increased sensitivity for better turning
   private listeners: { [key: string]: Function[] } = {};
 
   constructor(camera: THREE.Camera, domElement: HTMLElement) {
@@ -83,20 +84,34 @@ class PointerLockControls {
     const movementX = event.movementX || 0;
     const movementY = event.movementY || 0;
 
+    // Get current rotation
     this.euler.setFromQuaternion(this.camera.quaternion);
-    this.euler.y -= movementX * 0.002;
-    this.euler.x -= movementY * 0.002;
-    this.euler.x = Math.max(Math.PI / 2 - this.maxPolarAngle, Math.min(Math.PI / 2 - this.minPolarAngle, this.euler.x));
+    
+    // Apply horizontal rotation (Y axis)
+    this.euler.y -= movementX * this.sensitivity;
+    
+    // Apply vertical rotation (X axis) with constraints
+    this.euler.x -= movementY * this.sensitivity;
+    this.euler.x = Math.max(
+      Math.PI / 2 - this.maxPolarAngle, 
+      Math.min(Math.PI / 2 - this.minPolarAngle, this.euler.x)
+    );
+    
+    // Apply the rotation back to the camera
     this.camera.quaternion.setFromEuler(this.euler);
+    
+    console.log('Mouse movement applied - X:', movementX, 'Y:', movementY, 'Camera Y rotation:', this.euler.y);
   }
 
   onPointerlockChange() {
     if (this.domElement.ownerDocument.pointerLockElement === this.domElement) {
       this.dispatchEvent({ type: 'lock' });
       this.isLocked = true;
+      console.log('Pointer locked - mouse look enabled');
     } else {
       this.dispatchEvent({ type: 'unlock' });
       this.isLocked = false;
+      console.log('Pointer unlocked - mouse look disabled');
     }
   }
 
@@ -160,7 +175,7 @@ const MazeGame: React.FC = () => {
   const MAZE_SIZE = 21;
   const WALL_HEIGHT = 3;
   const WALL_SIZE = 2;
-  const MOVE_SPEED = 0.08; // Increased for better movement
+  const MOVE_SPEED = 0.06; // Slightly reduced for better control
   const ENEMY_SPEED = 0.02;
   const ENEMY_ATTACK_RANGE = 2;
   const ENEMY_ATTACK_COOLDOWN = 3000;
@@ -168,7 +183,7 @@ const MazeGame: React.FC = () => {
   const RESPAWN_DELAY = 2000;
   const ENEMY_COUNT = 4;
   const MIN_SPAWN_DISTANCE = 8;
-  const COLLISION_RADIUS = 0.25; // Reduced collision radius
+  const COLLISION_RADIUS = 0.2; // Further reduced collision radius
 
   const getEnvironmentSettings = (time: TimeOfDay, weatherType: WeatherType, quality: GraphicsQuality) => {
     const timeSettings = {
@@ -644,7 +659,7 @@ const MazeGame: React.FC = () => {
   useEffect(() => {
     if (!mountRef.current) return;
 
-    console.log('Initializing maze game...');
+    console.log('Initializing maze game with improved turning...');
 
     const settings = getEnvironmentSettings(timeOfDay, weather, graphicsQuality);
 
@@ -735,7 +750,7 @@ const MazeGame: React.FC = () => {
     const controls = new PointerLockControls(camera, renderer.domElement);
     controlsRef.current = controls;
 
-    // Improved key handling with better debugging
+    // Improved key handling
     const onKeyDown = (event: KeyboardEvent) => {
       if (!controls.isLocked) return;
       
@@ -799,19 +814,19 @@ const MazeGame: React.FC = () => {
       }
     };
 
-    // Add event listeners to document for global key capture
+    // Add event listeners
     document.addEventListener('keydown', onKeyDown, false);
     document.addEventListener('keyup', onKeyUp, false);
     window.addEventListener('resize', onResize);
 
     const onLock = () => {
-      console.log('Pointer locked - movement enabled');
+      console.log('Pointer locked - movement and mouse look enabled');
       setIsLocked(true);
       // Focus the canvas when locked
       renderer.domElement.focus();
     };
     const onUnlock = () => {
-      console.log('Pointer unlocked - movement disabled');
+      console.log('Pointer unlocked - movement and mouse look disabled');
       setIsLocked(false);
       // Reset movement state when unlocking
       moveStateRef.current = { forward: false, backward: false, left: false, right: false };
@@ -836,7 +851,7 @@ const MazeGame: React.FC = () => {
     };
     animate();
 
-    toast.success("Enhanced Maze Game loaded! Click to lock pointer and use WASD or Arrow keys to move!");
+    toast.success("Enhanced Maze Game loaded! Click to lock pointer and use mouse to look around, WASD to move!");
 
     return () => {
       document.removeEventListener('keydown', onKeyDown, false);
@@ -845,6 +860,7 @@ const MazeGame: React.FC = () => {
       
       controls.removeEventListener('lock', onLock);
       controls.removeEventListener('unlock', onUnlock);
+      controls.disconnect();
       
       if (mountRef.current && renderer.domElement) {
         mountRef.current.removeChild(renderer.domElement);
@@ -1050,14 +1066,14 @@ const MazeGame: React.FC = () => {
     if (moveStateRef.current.left) moveVector.x -= 1;
     if (moveStateRef.current.right) moveVector.x += 1;
 
-    // Normalize diagonal movement
+    // Only move if there's input
     if (moveVector.length() > 0) {
       moveVector.normalize();
       moveVector.multiplyScalar(MOVE_SPEED);
 
-      // Apply camera rotation to movement
-      const euler = new THREE.Euler(0, camera.rotation.y, 0);
-      moveVector.applyEuler(euler);
+      // Apply camera rotation to movement (only Y rotation for horizontal movement)
+      const yRotation = new THREE.Euler(0, camera.rotation.y, 0);
+      moveVector.applyEuler(yRotation);
 
       // Store original position
       const originalPosition = camera.position.clone();
@@ -1071,46 +1087,37 @@ const MazeGame: React.FC = () => {
       }
 
       // Try Z movement separately
-      const testZ = originalPosition.clone();
+      const testZ = camera.position.clone(); // Use current position (after X movement)
       testZ.z += moveVector.z;
       
       if (!checkCollision(testZ)) {
         camera.position.z = testZ.z;
       }
 
-      // Update player position reference with better precision
+      // Update player position reference
       const worldToMaze = (worldPos: number) => (worldPos + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE;
       
       playerPositionRef.current = {
         x: Math.round(worldToMaze(camera.position.x)),
         z: Math.round(worldToMaze(camera.position.z))
       };
-      
-      // Reduced logging frequency
-      if (Math.random() < 0.1) { // Only log 10% of the time
-        console.log('Player world pos:', {
-          x: camera.position.x.toFixed(2),
-          z: camera.position.z.toFixed(2)
-        }, 'Maze pos:', playerPositionRef.current);
-      }
     }
   };
 
   const checkCollision = (position: THREE.Vector3): boolean => {
-    // Improved coordinate conversion
     const worldToMaze = (worldPos: number) => (worldPos + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE;
     
     const mazeX = worldToMaze(position.x);
     const mazeZ = worldToMaze(position.z);
 
-    // Check boundaries with smaller margin
+    // Check boundaries
     const margin = 0.1;
     if (mazeX < margin || mazeX >= MAZE_SIZE - margin || 
         mazeZ < margin || mazeZ >= MAZE_SIZE - margin) {
       return true;
     }
 
-    // Simplified collision detection - check fewer points with better precision
+    // Check collision points around player
     const checkPositions = [
       { x: mazeX, z: mazeZ }, // Center
       { x: mazeX + COLLISION_RADIUS, z: mazeZ }, // Right
@@ -1123,13 +1130,8 @@ const MazeGame: React.FC = () => {
       const gridX = Math.floor(checkPos.x);
       const gridZ = Math.floor(checkPos.z);
       
-      // Ensure we're within maze bounds
       if (gridX >= 0 && gridX < MAZE_SIZE && gridZ >= 0 && gridZ < MAZE_SIZE) {
         if (mazeRef.current[gridZ][gridX] === 1) {
-          // Only log actual collisions, not every check
-          if (Math.random() < 0.1) {
-            console.log('Wall collision at grid:', gridX, gridZ);
-          }
           return true;
         }
       }
