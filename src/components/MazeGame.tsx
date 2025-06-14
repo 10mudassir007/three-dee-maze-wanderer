@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { MazeGenerator } from '../utils/mazeGenerator';
@@ -21,7 +22,7 @@ const MazeGame: React.FC = () => {
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-  const controlsRef = useRef<any>(null);
+  const controlsRef = useRef<PointerLockControls | null>(null);
   const mazeRef = useRef<number[][]>([]);
   const wallsRef = useRef<THREE.Mesh[]>([]);
   const playerPositionRef = useRef<Position>({ x: 1, z: 1 });
@@ -644,7 +645,7 @@ const MazeGame: React.FC = () => {
   );
 };
 
-// Fixed PointerLockControls implementation
+// Fixed PointerLockControls implementation that properly extends EventDispatcher
 class PointerLockControls extends THREE.EventDispatcher {
   camera: THREE.Camera;
   domElement: HTMLElement;
