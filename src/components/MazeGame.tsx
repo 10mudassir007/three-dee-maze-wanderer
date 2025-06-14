@@ -175,7 +175,7 @@ const MazeGame: React.FC = () => {
   const MAZE_SIZE = 21;
   const WALL_HEIGHT = 3;
   const WALL_SIZE = 2;
-  const MOVE_SPEED = 0.06; // Slightly reduced for better control
+  const MOVE_SPEED = 0.08; // Increased for better responsiveness
   const ENEMY_SPEED = 0.02;
   const ENEMY_ATTACK_RANGE = 2;
   const ENEMY_ATTACK_COOLDOWN = 3000;
@@ -183,7 +183,7 @@ const MazeGame: React.FC = () => {
   const RESPAWN_DELAY = 2000;
   const ENEMY_COUNT = 4;
   const MIN_SPAWN_DISTANCE = 8;
-  const COLLISION_RADIUS = 0.2; // Further reduced collision radius
+  const COLLISION_RADIUS = 0.3; // Reduced for better movement
 
   const getEnvironmentSettings = (time: TimeOfDay, weatherType: WeatherType, quality: GraphicsQuality) => {
     const timeSettings = {
@@ -659,7 +659,7 @@ const MazeGame: React.FC = () => {
   useEffect(() => {
     if (!mountRef.current) return;
 
-    console.log('Initializing maze game with improved turning...');
+    console.log('Initializing maze game with improved movement...');
 
     const settings = getEnvironmentSettings(timeOfDay, weather, graphicsQuality);
 
@@ -750,58 +750,59 @@ const MazeGame: React.FC = () => {
     const controls = new PointerLockControls(camera, renderer.domElement);
     controlsRef.current = controls;
 
-    // Improved key handling
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!controls.isLocked) return;
-      
-      event.preventDefault();
-      console.log('Key down:', event.code);
-
+      // Always capture movement keys, regardless of lock state
       switch (event.code) {
         case 'KeyW':
         case 'ArrowUp':
           moveStateRef.current.forward = true;
-          console.log('Moving forward');
+          console.log('Key down: Forward');
           break;
         case 'KeyA':
         case 'ArrowLeft':
           moveStateRef.current.left = true;
-          console.log('Moving left');
+          console.log('Key down: Left');
           break;
         case 'KeyS':
         case 'ArrowDown':
           moveStateRef.current.backward = true;
-          console.log('Moving backward');
+          console.log('Key down: Backward');
           break;
         case 'KeyD':
         case 'ArrowRight':
           moveStateRef.current.right = true;
-          console.log('Moving right');
+          console.log('Key down: Right');
           break;
         case 'Escape':
-          controls.unlock();
+          if (controls.isLocked) {
+            controls.unlock();
+          }
           break;
       }
     };
 
     const onKeyUp = (event: KeyboardEvent) => {
-      console.log('Key up:', event.code);
+      // Always capture key releases, regardless of lock state
       switch (event.code) {
         case 'KeyW':
         case 'ArrowUp':
           moveStateRef.current.forward = false;
+          console.log('Key up: Forward stopped');
           break;
         case 'KeyA':
         case 'ArrowLeft':
           moveStateRef.current.left = false;
+          console.log('Key up: Left stopped');
           break;
         case 'KeyS':
         case 'ArrowDown':
           moveStateRef.current.backward = false;
+          console.log('Key up: Backward stopped');
           break;
         case 'KeyD':
         case 'ArrowRight':
           moveStateRef.current.right = false;
+          console.log('Key up: Right stopped');
           break;
       }
     };
@@ -814,9 +815,9 @@ const MazeGame: React.FC = () => {
       }
     };
 
-    // Add event listeners
-    document.addEventListener('keydown', onKeyDown, false);
-    document.addEventListener('keyup', onKeyUp, false);
+    // Add event listeners to window instead of document for better key handling
+    window.addEventListener('keydown', onKeyDown, false);
+    window.addEventListener('keyup', onKeyUp, false);
     window.addEventListener('resize', onResize);
 
     const onLock = () => {
@@ -830,6 +831,7 @@ const MazeGame: React.FC = () => {
       setIsLocked(false);
       // Reset movement state when unlocking
       moveStateRef.current = { forward: false, backward: false, left: false, right: false };
+      console.log('Movement state reset on unlock');
     };
     
     controls.addEventListener('lock', onLock);
@@ -845,8 +847,6 @@ const MazeGame: React.FC = () => {
         checkWinCondition();
       }
 
-      // ... keep existing code (precipitation animation)
-
       renderer.render(scene, camera);
     };
     animate();
@@ -854,8 +854,8 @@ const MazeGame: React.FC = () => {
     toast.success("Enhanced Maze Game loaded! Click to lock pointer and use mouse to look around, WASD to move!");
 
     return () => {
-      document.removeEventListener('keydown', onKeyDown, false);
-      document.removeEventListener('keyup', onKeyUp, false);
+      window.removeEventListener('keydown', onKeyDown, false);
+      window.removeEventListener('keyup', onKeyUp, false);
       window.removeEventListener('resize', onResize);
       
       controls.removeEventListener('lock', onLock);
@@ -1058,83 +1058,62 @@ const MazeGame: React.FC = () => {
     if (!cameraRef.current || !mazeRef.current || isRespawning) return;
 
     const camera = cameraRef.current;
-    const moveVector = new THREE.Vector3();
+    const velocity = new THREE.Vector3();
 
-    // Calculate movement direction based on pressed keys
-    if (moveStateRef.current.forward) moveVector.z -= 1;
-    if (moveStateRef.current.backward) moveVector.z += 1;
-    if (moveStateRef.current.left) moveVector.x -= 1;
-    if (moveStateRef.current.right) moveVector.x += 1;
+    // Calculate movement direction
+    if (moveStateRef.current.forward) velocity.z -= MOVE_SPEED;
+    if (moveStateRef.current.backward) velocity.z += MOVE_SPEED;
+    if (moveStateRef.current.left) velocity.x -= MOVE_SPEED;
+    if (moveStateRef.current.right) velocity.x += MOVE_SPEED;
 
     // Only move if there's input
-    if (moveVector.length() > 0) {
-      moveVector.normalize();
-      moveVector.multiplyScalar(MOVE_SPEED);
+    if (velocity.length() > 0) {
+      // Apply camera rotation to movement vector
+      velocity.applyQuaternion(camera.quaternion);
+      velocity.y = 0; // Keep movement horizontal
 
-      // Apply camera rotation to movement (only Y rotation for horizontal movement)
-      const yRotation = new THREE.Euler(0, camera.rotation.y, 0);
-      moveVector.applyEuler(yRotation);
-
-      // Store original position
-      const originalPosition = camera.position.clone();
-      
-      // Try X movement first
-      const testX = originalPosition.clone();
-      testX.x += moveVector.x;
-      
-      if (!checkCollision(testX)) {
-        camera.position.x = testX.x;
+      // Test X movement independently
+      const testPosX = camera.position.clone();
+      testPosX.x += velocity.x;
+      if (!checkWallCollision(testPosX)) {
+        camera.position.x = testPosX.x;
       }
 
-      // Try Z movement separately
-      const testZ = camera.position.clone(); // Use current position (after X movement)
-      testZ.z += moveVector.z;
-      
-      if (!checkCollision(testZ)) {
-        camera.position.z = testZ.z;
+      // Test Z movement independently
+      const testPosZ = camera.position.clone();
+      testPosZ.z += velocity.z;
+      if (!checkWallCollision(testPosZ)) {
+        camera.position.z = testPosZ.z;
       }
 
       // Update player position reference
-      const worldToMaze = (worldPos: number) => (worldPos + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE;
-      
       playerPositionRef.current = {
-        x: Math.round(worldToMaze(camera.position.x)),
-        z: Math.round(worldToMaze(camera.position.z))
+        x: Math.round((camera.position.x + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE),
+        z: Math.round((camera.position.z + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE)
       };
+
+      console.log('Player moved to:', playerPositionRef.current);
     }
   };
 
-  const checkCollision = (position: THREE.Vector3): boolean => {
-    const worldToMaze = (worldPos: number) => (worldPos + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE;
-    
-    const mazeX = worldToMaze(position.x);
-    const mazeZ = worldToMaze(position.z);
+  const checkWallCollision = (position: THREE.Vector3): boolean => {
+    // Convert world position to maze coordinates
+    const mazeX = (position.x + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE;
+    const mazeZ = (position.z + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE;
 
-    // Check boundaries
-    const margin = 0.1;
-    if (mazeX < margin || mazeX >= MAZE_SIZE - margin || 
-        mazeZ < margin || mazeZ >= MAZE_SIZE - margin) {
+    // Check boundaries with margin
+    if (mazeX < 0.5 || mazeX >= MAZE_SIZE - 0.5 || 
+        mazeZ < 0.5 || mazeZ >= MAZE_SIZE - 0.5) {
       return true;
     }
 
-    // Check collision points around player
-    const checkPositions = [
-      { x: mazeX, z: mazeZ }, // Center
-      { x: mazeX + COLLISION_RADIUS, z: mazeZ }, // Right
-      { x: mazeX - COLLISION_RADIUS, z: mazeZ }, // Left
-      { x: mazeX, z: mazeZ + COLLISION_RADIUS }, // Forward
-      { x: mazeX, z: mazeZ - COLLISION_RADIUS }  // Backward
-    ];
-
-    for (const checkPos of checkPositions) {
-      const gridX = Math.floor(checkPos.x);
-      const gridZ = Math.floor(checkPos.z);
-      
-      if (gridX >= 0 && gridX < MAZE_SIZE && gridZ >= 0 && gridZ < MAZE_SIZE) {
-        if (mazeRef.current[gridZ][gridX] === 1) {
-          return true;
-        }
-      }
+    // Check for wall collision in a small radius around player
+    const gridX = Math.floor(mazeX);
+    const gridZ = Math.floor(mazeZ);
+    
+    // Only check the immediate grid cell
+    if (gridX >= 0 && gridX < MAZE_SIZE && gridZ >= 0 && gridZ < MAZE_SIZE) {
+      return mazeRef.current[gridZ][gridX] === 1;
     }
 
     return false;
