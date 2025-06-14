@@ -32,7 +32,7 @@ type TimeOfDay = 'day' | 'night' | 'sunset' | 'dawn';
 type WeatherType = 'sunny' | 'cloudy' | 'rainy' | 'snowy';
 
 // Fixed PointerLockControls implementation
-class PointerLockControls extends THREE.EventDispatcher {
+class PointerLockControls {
   camera: THREE.Camera;
   domElement: HTMLElement;
   isLocked: boolean = false;
@@ -40,9 +40,9 @@ class PointerLockControls extends THREE.EventDispatcher {
   vec = new THREE.Vector3();
   minPolarAngle = 0;
   maxPolarAngle = Math.PI;
+  private listeners: { [key: string]: Function[] } = {};
 
   constructor(camera: THREE.Camera, domElement: HTMLElement) {
-    super();
     this.camera = camera;
     this.domElement = domElement;
 
@@ -51,6 +51,28 @@ class PointerLockControls extends THREE.EventDispatcher {
     this.onPointerlockError = this.onPointerlockError.bind(this);
 
     this.connect();
+  }
+
+  addEventListener(type: string, listener: Function) {
+    if (!this.listeners[type]) {
+      this.listeners[type] = [];
+    }
+    this.listeners[type].push(listener);
+  }
+
+  removeEventListener(type: string, listener: Function) {
+    if (this.listeners[type]) {
+      const index = this.listeners[type].indexOf(listener);
+      if (index > -1) {
+        this.listeners[type].splice(index, 1);
+      }
+    }
+  }
+
+  dispatchEvent(event: { type: string; [key: string]: any }) {
+    if (this.listeners[event.type]) {
+      this.listeners[event.type].forEach(listener => listener());
+    }
   }
 
   onMouseMove(event: MouseEvent) {
