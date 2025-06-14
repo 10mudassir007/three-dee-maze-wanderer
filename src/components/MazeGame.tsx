@@ -160,15 +160,15 @@ const MazeGame: React.FC = () => {
   const MAZE_SIZE = 21;
   const WALL_HEIGHT = 3;
   const WALL_SIZE = 2;
-  const MOVE_SPEED = 0.05; // Slightly reduced for better control
+  const MOVE_SPEED = 0.08; // Increased for better movement
   const ENEMY_SPEED = 0.02;
   const ENEMY_ATTACK_RANGE = 2;
   const ENEMY_ATTACK_COOLDOWN = 3000;
-  const ENEMY_ATTACK_DURATION = 1000; // Attack lasts 1 second
+  const ENEMY_ATTACK_DURATION = 1000;
   const RESPAWN_DELAY = 2000;
   const ENEMY_COUNT = 4;
-  const MIN_SPAWN_DISTANCE = 8; // Minimum distance for enemy spawns from player
-  const COLLISION_RADIUS = 0.4; // Increased for better collision detection
+  const MIN_SPAWN_DISTANCE = 8;
+  const COLLISION_RADIUS = 0.25; // Reduced collision radius
 
   const getEnvironmentSettings = (time: TimeOfDay, weatherType: WeatherType, quality: GraphicsQuality) => {
     const timeSettings = {
@@ -1062,67 +1062,61 @@ const MazeGame: React.FC = () => {
       // Store original position
       const originalPosition = camera.position.clone();
       
-      // Try moving in both directions at once
-      const newPosition = originalPosition.clone().add(moveVector);
+      // Try X movement first
+      const testX = originalPosition.clone();
+      testX.x += moveVector.x;
       
-      if (!checkCollision(newPosition)) {
-        // Full movement is safe
-        camera.position.copy(newPosition);
-      } else {
-        // Try X movement only
-        const xOnlyPosition = originalPosition.clone();
-        xOnlyPosition.x += moveVector.x;
-        
-        if (!checkCollision(xOnlyPosition)) {
-          camera.position.x = xOnlyPosition.x;
-        }
-
-        // Try Z movement only
-        const zOnlyPosition = originalPosition.clone();
-        zOnlyPosition.z += moveVector.z;
-        
-        if (!checkCollision(zOnlyPosition)) {
-          camera.position.z = zOnlyPosition.z;
-        }
+      if (!checkCollision(testX)) {
+        camera.position.x = testX.x;
       }
 
-      // Update player position reference
+      // Try Z movement separately
+      const testZ = originalPosition.clone();
+      testZ.z += moveVector.z;
+      
+      if (!checkCollision(testZ)) {
+        camera.position.z = testZ.z;
+      }
+
+      // Update player position reference with better precision
+      const worldToMaze = (worldPos: number) => (worldPos + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE;
+      
       playerPositionRef.current = {
-        x: Math.round((camera.position.x + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE),
-        z: Math.round((camera.position.z + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE)
+        x: Math.round(worldToMaze(camera.position.x)),
+        z: Math.round(worldToMaze(camera.position.z))
       };
       
-      console.log('Player position:', playerPositionRef.current, 'World pos:', {
-        x: camera.position.x.toFixed(2),
-        z: camera.position.z.toFixed(2)
-      });
+      // Reduced logging frequency
+      if (Math.random() < 0.1) { // Only log 10% of the time
+        console.log('Player world pos:', {
+          x: camera.position.x.toFixed(2),
+          z: camera.position.z.toFixed(2)
+        }, 'Maze pos:', playerPositionRef.current);
+      }
     }
   };
 
   const checkCollision = (position: THREE.Vector3): boolean => {
-    // Convert world position to maze coordinates
-    const mazeX = (position.x + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE;
-    const mazeZ = (position.z + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE;
+    // Improved coordinate conversion
+    const worldToMaze = (worldPos: number) => (worldPos + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE;
+    
+    const mazeX = worldToMaze(position.x);
+    const mazeZ = worldToMaze(position.z);
 
-    // Check boundaries with margin
-    const margin = COLLISION_RADIUS;
+    // Check boundaries with smaller margin
+    const margin = 0.1;
     if (mazeX < margin || mazeX >= MAZE_SIZE - margin || 
         mazeZ < margin || mazeZ >= MAZE_SIZE - margin) {
-      console.log('Boundary collision at:', mazeX.toFixed(2), mazeZ.toFixed(2));
       return true;
     }
 
-    // Check collision with walls using a more thorough approach
+    // Simplified collision detection - check fewer points with better precision
     const checkPositions = [
       { x: mazeX, z: mazeZ }, // Center
       { x: mazeX + COLLISION_RADIUS, z: mazeZ }, // Right
       { x: mazeX - COLLISION_RADIUS, z: mazeZ }, // Left
       { x: mazeX, z: mazeZ + COLLISION_RADIUS }, // Forward
-      { x: mazeX, z: mazeZ - COLLISION_RADIUS }, // Backward
-      { x: mazeX + COLLISION_RADIUS * 0.7, z: mazeZ + COLLISION_RADIUS * 0.7 }, // Diagonal corners
-      { x: mazeX - COLLISION_RADIUS * 0.7, z: mazeZ + COLLISION_RADIUS * 0.7 },
-      { x: mazeX + COLLISION_RADIUS * 0.7, z: mazeZ - COLLISION_RADIUS * 0.7 },
-      { x: mazeX - COLLISION_RADIUS * 0.7, z: mazeZ - COLLISION_RADIUS * 0.7 }
+      { x: mazeX, z: mazeZ - COLLISION_RADIUS }  // Backward
     ];
 
     for (const checkPos of checkPositions) {
@@ -1132,7 +1126,10 @@ const MazeGame: React.FC = () => {
       // Ensure we're within maze bounds
       if (gridX >= 0 && gridX < MAZE_SIZE && gridZ >= 0 && gridZ < MAZE_SIZE) {
         if (mazeRef.current[gridZ][gridX] === 1) {
-          console.log('Wall collision detected at grid:', gridX, gridZ, 'check pos:', checkPos.x.toFixed(2), checkPos.z.toFixed(2));
+          // Only log actual collisions, not every check
+          if (Math.random() < 0.1) {
+            console.log('Wall collision at grid:', gridX, gridZ);
+          }
           return true;
         }
       }
