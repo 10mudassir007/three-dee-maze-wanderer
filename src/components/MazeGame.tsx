@@ -3,11 +3,28 @@ import * as THREE from 'three';
 import { MazeGenerator } from '../utils/mazeGenerator';
 import { toast } from 'sonner';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Settings, Cloud, Sun, CloudRain, CloudSnow } from 'lucide-react';
+import { Settings, Cloud, Sun, CloudRain, CloudSnow, Heart } from 'lucide-react';
 
 interface Position {
   x: number;
   z: number;
+}
+
+interface Enemy {
+  id: string;
+  mesh: THREE.Mesh;
+  position: Position;
+  health: number;
+  lastAttack: number;
+  patrolPath: Position[];
+  currentPathIndex: number;
+  speed: number;
+}
+
+interface Checkpoint {
+  position: Position;
+  mesh: THREE.Mesh;
+  activated: boolean;
 }
 
 type GraphicsQuality = 'low' | 'medium' | 'high';
@@ -17,17 +34,24 @@ type WeatherType = 'sunny' | 'cloudy' | 'rainy' | 'snowy';
 const MazeGame: React.FC = () => {
   const mountRef = useRef<HTMLDivElement>(null);
   const [gameWon, setGameWon] = useState(false);
+  const [gameOver, setGameOver] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [graphicsQuality, setGraphicsQuality] = useState<GraphicsQuality>('low');
   const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>('day');
   const [weather, setWeather] = useState<WeatherType>('sunny');
+  const [lives, setLives] = useState(3);
+  const [currentCheckpoint, setCurrentCheckpoint] = useState<Position>({ x: 1, z: 1 });
+  const [isRespawning, setIsRespawning] = useState(false);
+  
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<PointerLockControls | null>(null);
   const mazeRef = useRef<number[][]>([]);
   const wallsRef = useRef<THREE.Mesh[]>([]);
+  const enemiesRef = useRef<Enemy[]>([]);
+  const checkpointsRef = useRef<Checkpoint[]>([]);
   const playerPositionRef = useRef<Position>({ x: 1, z: 1 });
   const exitPositionRef = useRef<Position>({ x: 0, z: 0 });
   const moveStateRef = useRef({
@@ -41,6 +65,10 @@ const MazeGame: React.FC = () => {
   const WALL_HEIGHT = 3;
   const WALL_SIZE = 2;
   const MOVE_SPEED = 0.1;
+  const ENEMY_SPEED = 0.05;
+  const ENEMY_ATTACK_RANGE = 3;
+  const ENEMY_ATTACK_COOLDOWN = 2000;
+  const RESPAWN_DELAY = 2000;
 
   const getEnvironmentSettings = (time: TimeOfDay, weatherType: WeatherType, quality: GraphicsQuality) => {
     const timeSettings = {
@@ -218,6 +246,203 @@ const MazeGame: React.FC = () => {
     scene.add(precipitationGroup);
   };
 
+  const createEnemies = (scene: THREE.Scene, maze: number[][], settings: any) => {
+    const enemies: Enemy[] = [];
+    const enemyCount = Math.floor(MAZE_SIZE * MAZE_SIZE * 0.05); // 5% of maze cells
+
+    for (let i = 0; i < enemyCount; i++) {
+      let x, z;
+      do {
+        x = Math.floor(Math.random() * MAZE_SIZE);
+        z = Math.floor(Math.random() * MAZE_SIZE);
+      } while (maze[z][x] === 1 || (x === 1 && z === 1)); // Don't spawn on walls or start position
+
+      const enemyGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+      const enemyMaterial = new THREE.MeshLambertMaterial({ 
+        color: 0xff0000,
+        emissive: 0x440000
+      });
+      const enemyMesh = new THREE.Mesh(enemyGeometry, enemyMaterial);
+      
+      enemyMesh.position.set(
+        (x - MAZE_SIZE / 2) * WALL_SIZE,
+        0.5,
+        (z - MAZE_SIZE / 2) * WALL_SIZE
+      );
+
+      if (settings.enableShadows) {
+        enemyMesh.castShadow = true;
+      }
+
+      scene.add(enemyMesh);
+
+      // Create patrol path
+      const patrolPath: Position[] = [];
+      const pathLength = 3 + Math.floor(Math.random() * 3);
+      for (let j = 0; j < pathLength; j++) {
+        let px, pz;
+        do {
+          px = Math.max(0, Math.min(MAZE_SIZE - 1, x + Math.floor(Math.random() * 6) - 3));
+          pz = Math.max(0, Math.min(MAZE_SIZE - 1, z + Math.floor(Math.random() * 6) - 3));
+        } while (maze[pz][px] === 1);
+        patrolPath.push({ x: px, z: pz });
+      }
+
+      enemies.push({
+        id: `enemy_${i}`,
+        mesh: enemyMesh,
+        position: { x, z },
+        health: 100,
+        lastAttack: 0,
+        patrolPath,
+        currentPathIndex: 0,
+        speed: ENEMY_SPEED
+      });
+    }
+
+    enemiesRef.current = enemies;
+  };
+
+  const createCheckpoints = (scene: THREE.Scene, maze: number[][], settings: any) => {
+    const checkpoints: Checkpoint[] = [];
+    const checkpointCount = 3;
+
+    for (let i = 0; i < checkpointCount; i++) {
+      let x, z;
+      do {
+        x = Math.floor(Math.random() * MAZE_SIZE);
+        z = Math.floor(Math.random() * MAZE_SIZE);
+      } while (maze[z][x] === 1 || (x === 1 && z === 1)); // Don't spawn on walls or start position
+
+      const checkpointGeometry = new THREE.CylinderGeometry(0.8, 0.8, 0.2, 16);
+      const checkpointMaterial = new THREE.MeshLambertMaterial({ 
+        color: 0x00ff00,
+        emissive: 0x004400
+      });
+      const checkpointMesh = new THREE.Mesh(checkpointGeometry, checkpointMaterial);
+      
+      checkpointMesh.position.set(
+        (x - MAZE_SIZE / 2) * WALL_SIZE,
+        0.1,
+        (z - MAZE_SIZE / 2) * WALL_SIZE
+      );
+
+      if (settings.enableShadows) {
+        checkpointMesh.castShadow = true;
+      }
+
+      scene.add(checkpointMesh);
+
+      checkpoints.push({
+        position: { x, z },
+        mesh: checkpointMesh,
+        activated: false
+      });
+    }
+
+    checkpointsRef.current = checkpoints;
+  };
+
+  const updateEnemies = () => {
+    if (!sceneRef.current || !cameraRef.current) return;
+
+    const currentTime = Date.now();
+    const playerPos = playerPositionRef.current;
+
+    enemiesRef.current.forEach(enemy => {
+      // Update patrol movement
+      if (enemy.patrolPath.length > 0) {
+        const targetPos = enemy.patrolPath[enemy.currentPathIndex];
+        const dx = targetPos.x - enemy.position.x;
+        const dz = targetPos.z - enemy.position.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+
+        if (distance < 0.5) {
+          enemy.currentPathIndex = (enemy.currentPathIndex + 1) % enemy.patrolPath.length;
+        } else {
+          enemy.position.x += (dx / distance) * enemy.speed;
+          enemy.position.z += (dz / distance) * enemy.speed;
+          
+          enemy.mesh.position.set(
+            (enemy.position.x - MAZE_SIZE / 2) * WALL_SIZE,
+            0.5,
+            (enemy.position.z - MAZE_SIZE / 2) * WALL_SIZE
+          );
+        }
+      }
+
+      // Check for player attack
+      const playerDistance = Math.sqrt(
+        Math.pow(playerPos.x - enemy.position.x, 2) + 
+        Math.pow(playerPos.z - enemy.position.z, 2)
+      );
+
+      if (playerDistance < ENEMY_ATTACK_RANGE && 
+          currentTime - enemy.lastAttack > ENEMY_ATTACK_COOLDOWN &&
+          !isRespawning) {
+        enemy.lastAttack = currentTime;
+        attackPlayer();
+      }
+    });
+  };
+
+  const attackPlayer = () => {
+    if (isRespawning) return;
+    
+    const newLives = lives - 1;
+    setLives(newLives);
+    
+    if (newLives <= 0) {
+      setGameOver(true);
+      toast.error("Game Over! You've run out of lives!");
+    } else {
+      toast.error(`You've been attacked! Lives remaining: ${newLives}`);
+      respawnPlayer();
+    }
+  };
+
+  const respawnPlayer = () => {
+    if (!cameraRef.current) return;
+    
+    setIsRespawning(true);
+    
+    setTimeout(() => {
+      if (cameraRef.current) {
+        cameraRef.current.position.set(
+          (currentCheckpoint.x - MAZE_SIZE / 2) * WALL_SIZE,
+          1.6,
+          (currentCheckpoint.z - MAZE_SIZE / 2) * WALL_SIZE
+        );
+        playerPositionRef.current = { ...currentCheckpoint };
+        setIsRespawning(false);
+        toast.success("Respawned at checkpoint!");
+      }
+    }, RESPAWN_DELAY);
+  };
+
+  const checkCheckpoints = () => {
+    const playerPos = playerPositionRef.current;
+    
+    checkpointsRef.current.forEach(checkpoint => {
+      if (!checkpoint.activated) {
+        const distance = Math.sqrt(
+          Math.pow(playerPos.x - checkpoint.position.x, 2) + 
+          Math.pow(playerPos.z - checkpoint.position.z, 2)
+        );
+
+        if (distance < 2) {
+          checkpoint.activated = true;
+          setCurrentCheckpoint(checkpoint.position);
+          checkpoint.mesh.material = new THREE.MeshLambertMaterial({ 
+            color: 0xffff00,
+            emissive: 0x444400
+          });
+          toast.success("Checkpoint activated!");
+        }
+      }
+    });
+  };
+
   useEffect(() => {
     if (!mountRef.current) return;
 
@@ -291,6 +516,10 @@ const MazeGame: React.FC = () => {
 
     // Create exit marker
     createExitMarker(scene, settings);
+
+    // Create enemies and checkpoints
+    createEnemies(scene, maze, settings);
+    createCheckpoints(scene, maze, settings);
 
     // Ground with name for easy updates
     const groundGeometry = new THREE.PlaneGeometry(MAZE_SIZE * WALL_SIZE, MAZE_SIZE * WALL_SIZE);
@@ -379,8 +608,10 @@ const MazeGame: React.FC = () => {
     const animate = () => {
       requestAnimationFrame(animate);
 
-      if (controls.isLocked && !gameWon) {
+      if (controls.isLocked && !gameWon && !gameOver) {
         updateMovement();
+        updateEnemies();
+        checkCheckpoints();
         checkWinCondition();
       }
 
@@ -404,7 +635,7 @@ const MazeGame: React.FC = () => {
     };
     animate();
 
-    toast.success("Maze loaded! Click to start and use WASD or arrow keys to navigate!");
+    toast.success("Maze loaded! Avoid enemies and find checkpoints!");
 
     return () => {
       document.removeEventListener('keydown', onKeyDown);
@@ -607,7 +838,7 @@ const MazeGame: React.FC = () => {
   };
 
   const updateMovement = () => {
-    if (!cameraRef.current || !mazeRef.current) return;
+    if (!cameraRef.current || !mazeRef.current || isRespawning) return;
 
     const camera = cameraRef.current;
     const velocity = new THREE.Vector3();
@@ -683,11 +914,26 @@ const MazeGame: React.FC = () => {
 
   const resetGame = () => {
     setGameWon(false);
+    setGameOver(false);
+    setLives(3);
+    setCurrentCheckpoint({ x: 1, z: 1 });
+    setIsRespawning(false);
+    
     if (cameraRef.current) {
       cameraRef.current.position.set(WALL_SIZE, 1.6, WALL_SIZE);
       playerPositionRef.current = { x: 1, z: 1 };
     }
-    toast.success("Maze reset! Good luck!");
+    
+    // Reset checkpoints
+    checkpointsRef.current.forEach(checkpoint => {
+      checkpoint.activated = false;
+      checkpoint.mesh.material = new THREE.MeshLambertMaterial({ 
+        color: 0x00ff00,
+        emissive: 0x004400
+      });
+    });
+    
+    toast.success("Game reset! Good luck surviving the maze!");
   };
 
   const handleGraphicsChange = (quality: GraphicsQuality) => {
@@ -718,8 +964,35 @@ const MazeGame: React.FC = () => {
     <div className="relative w-full h-screen">
       <div ref={mountRef} className="w-full h-full" />
       
+      {/* Lives Display */}
+      {isLocked && !gameWon && !gameOver && (
+        <div className="absolute top-4 left-4 bg-black bg-opacity-50 text-white p-3 rounded">
+          <div className="flex items-center gap-2 mb-2">
+            <Heart className="text-red-500" size={20} />
+            <span className="font-bold">Lives: {lives}</span>
+          </div>
+          <p>Find the red exit marker!</p>
+          <p className="text-sm">Press ESC to unlock mouse</p>
+          <div className="text-xs mt-1 space-y-1">
+            <p>Quality: {graphicsQuality}</p>
+            <div className="flex items-center gap-1">
+              <span>Time: {timeOfDay}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              {getWeatherIcon(weather)}
+              <span>Weather: {weather}</span>
+            </div>
+          </div>
+          {isRespawning && (
+            <div className="mt-2 text-yellow-300 text-sm">
+              Respawning...
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Settings Button */}
-      {isLocked && !gameWon && (
+      {isLocked && !gameWon && !gameOver && (
         <button
           onClick={() => setShowSettings(!showSettings)}
           className="absolute top-4 right-4 bg-black bg-opacity-50 text-white p-2 rounded hover:bg-opacity-70"
@@ -729,7 +1002,7 @@ const MazeGame: React.FC = () => {
       )}
 
       {/* Settings Panel */}
-      {showSettings && isLocked && !gameWon && (
+      {showSettings && isLocked && !gameWon && !gameOver && (
         <div className="absolute top-16 right-4 bg-black bg-opacity-80 text-white p-4 rounded">
           <h3 className="text-lg font-bold mb-3">Game Settings</h3>
           <div className="space-y-4">
@@ -800,14 +1073,18 @@ const MazeGame: React.FC = () => {
         </div>
       )}
 
-      {!isLocked && !gameWon && (
+      {!isLocked && !gameWon && !gameOver && (
         <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
           <div className="bg-white p-8 rounded-lg text-center max-w-md">
-            <h2 className="text-2xl font-bold mb-4">3D Maze Game</h2>
-            <p className="mb-4">Navigate through the maze to reach the red exit marker!</p>
+            <h2 className="text-2xl font-bold mb-4">3D Maze Survival Game</h2>
+            <p className="mb-4">Navigate through the maze, avoid enemies, and reach the red exit marker!</p>
             <p className="mb-4 text-sm text-gray-600">
-              Use WASD or arrow keys to move, mouse to look around
+              Use WASD or arrow keys to move, mouse to look around. Find green checkpoints to save your progress!
             </p>
+            <div className="mb-4 flex items-center justify-center gap-2">
+              <Heart className="text-red-500" size={20} />
+              <span className="font-bold">3 Lives</span>
+            </div>
             <div className="mb-4 space-y-4">
               <div>
                 <label className="block text-sm font-medium mb-2">Graphics Quality:</label>
@@ -877,7 +1154,7 @@ const MazeGame: React.FC = () => {
               onClick={startGame}
               className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold"
             >
-              Start Game
+              Start Survival Game
             </button>
           </div>
         </div>
@@ -887,7 +1164,7 @@ const MazeGame: React.FC = () => {
         <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
           <div className="bg-white p-8 rounded-lg text-center">
             <h2 className="text-3xl font-bold mb-4 text-green-600">You Won!</h2>
-            <p className="mb-6">Congratulations on escaping the maze!</p>
+            <p className="mb-6">Congratulations on surviving the maze and reaching the exit!</p>
             <button
               onClick={resetGame}
               className="bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-lg font-semibold"
@@ -898,19 +1175,17 @@ const MazeGame: React.FC = () => {
         </div>
       )}
 
-      {isLocked && !gameWon && (
-        <div className="absolute top-4 left-4 bg-black bg-opacity-50 text-white p-3 rounded">
-          <p>Find the red exit marker!</p>
-          <p className="text-sm">Press ESC to unlock mouse</p>
-          <div className="text-xs mt-1 space-y-1">
-            <p>Quality: {graphicsQuality}</p>
-            <div className="flex items-center gap-1">
-              <span>Time: {timeOfDay}</span>
-            </div>
-            <div className="flex items-center gap-1">
-              {getWeatherIcon(weather)}
-              <span>Weather: {weather}</span>
-            </div>
+      {gameOver && (
+        <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white p-8 rounded-lg text-center">
+            <h2 className="text-3xl font-bold mb-4 text-red-600">Game Over!</h2>
+            <p className="mb-6">You ran out of lives! The enemies were too strong this time.</p>
+            <button
+              onClick={resetGame}
+              className="bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg font-semibold"
+            >
+              Try Again
+            </button>
           </div>
         </div>
       )}
