@@ -31,6 +31,11 @@ type GraphicsQuality = 'low' | 'medium' | 'high';
 type TimeOfDay = 'day' | 'night' | 'sunset' | 'dawn';
 type WeatherType = 'sunny' | 'cloudy' | 'rainy' | 'snowy';
 
+// Custom EventDispatcher events for PointerLockControls
+interface PointerLockControlsEvent {
+  type: string;
+}
+
 const MazeGame: React.FC = () => {
   const mountRef = useRef<HTMLDivElement>(null);
   const [gameWon, setGameWon] = useState(false);
@@ -60,15 +65,17 @@ const MazeGame: React.FC = () => {
     left: false,
     right: false
   });
+  const respawnTimerRef = useRef<number | null>(null);
 
   const MAZE_SIZE = 21;
   const WALL_HEIGHT = 3;
   const WALL_SIZE = 2;
   const MOVE_SPEED = 0.1;
-  const ENEMY_SPEED = 0.05;
-  const ENEMY_ATTACK_RANGE = 3;
-  const ENEMY_ATTACK_COOLDOWN = 2000;
+  const ENEMY_SPEED = 0.02;
+  const ENEMY_ATTACK_RANGE = 2;
+  const ENEMY_ATTACK_COOLDOWN = 3000;
   const RESPAWN_DELAY = 2000;
+  const ENEMY_COUNT = 4; // Fixed number of enemies (3-5)
 
   const getEnvironmentSettings = (time: TimeOfDay, weatherType: WeatherType, quality: GraphicsQuality) => {
     const timeSettings = {
@@ -248,14 +255,26 @@ const MazeGame: React.FC = () => {
 
   const createEnemies = (scene: THREE.Scene, maze: number[][], settings: any) => {
     const enemies: Enemy[] = [];
-    const enemyCount = Math.floor(MAZE_SIZE * MAZE_SIZE * 0.05); // 5% of maze cells
-
-    for (let i = 0; i < enemyCount; i++) {
+    
+    // Create exactly ENEMY_COUNT enemies instead of percentage-based
+    let enemiesCreated = 0;
+    
+    // Try to place enemies with a maximum number of attempts to prevent infinite loops
+    let attempts = 0;
+    const maxAttempts = 100;
+    
+    while (enemiesCreated < ENEMY_COUNT && attempts < maxAttempts) {
+      attempts++;
+      
       let x, z;
       do {
         x = Math.floor(Math.random() * MAZE_SIZE);
         z = Math.floor(Math.random() * MAZE_SIZE);
-      } while (maze[z][x] === 1 || (x === 1 && z === 1)); // Don't spawn on walls or start position
+      } while (
+        maze[z][x] === 1 || // Don't spawn on walls
+        (x === 1 && z === 1) || // Don't spawn at start
+        (Math.abs(x - 1) + Math.abs(z - 1) < 5) // Keep away from starting area
+      );
 
       const enemyGeometry = new THREE.SphereGeometry(0.5, 8, 8);
       const enemyMaterial = new THREE.MeshLambertMaterial({ 
@@ -276,30 +295,56 @@ const MazeGame: React.FC = () => {
 
       scene.add(enemyMesh);
 
-      // Create patrol path
+      // Create a larger patrol path for more movement
       const patrolPath: Position[] = [];
-      const pathLength = 3 + Math.floor(Math.random() * 3);
-      for (let j = 0; j < pathLength; j++) {
-        let px, pz;
-        do {
-          px = Math.max(0, Math.min(MAZE_SIZE - 1, x + Math.floor(Math.random() * 6) - 3));
-          pz = Math.max(0, Math.min(MAZE_SIZE - 1, z + Math.floor(Math.random() * 6) - 3));
-        } while (maze[pz][px] === 1);
-        patrolPath.push({ x: px, z: pz });
+      const pathLength = 4 + Math.floor(Math.random() * 4); // 4-7 points
+      
+      // Start with the spawn position
+      patrolPath.push({ x, z });
+      
+      // Add path points in valid positions (non-wall areas)
+      for (let j = 1; j < pathLength; j++) {
+        let validPointFound = false;
+        let px = x, pz = z;
+        let pathAttempts = 0;
+        
+        while (!validPointFound && pathAttempts < 20) {
+          pathAttempts++;
+          
+          // Try to find a position a few steps away
+          const direction = Math.floor(Math.random() * 4); // 0: up, 1: right, 2: down, 3: left
+          const distance = 2 + Math.floor(Math.random() * 3); // 2-4 steps
+          
+          switch (direction) {
+            case 0: pz = Math.max(0, z - distance); break; // up
+            case 1: px = Math.min(MAZE_SIZE - 1, x + distance); break; // right
+            case 2: pz = Math.min(MAZE_SIZE - 1, z + distance); break; // down
+            case 3: px = Math.max(0, x - distance); break; // left
+          }
+          
+          // Check if position is valid (not a wall)
+          if (maze[pz][px] === 0) {
+            validPointFound = true;
+            patrolPath.push({ x: px, z: pz });
+          }
+        }
       }
 
       enemies.push({
-        id: `enemy_${i}`,
+        id: `enemy_${enemiesCreated}`,
         mesh: enemyMesh,
         position: { x, z },
         health: 100,
         lastAttack: 0,
         patrolPath,
         currentPathIndex: 0,
-        speed: ENEMY_SPEED
+        speed: ENEMY_SPEED * (0.8 + Math.random() * 0.4) // Slightly randomized speed
       });
+      
+      enemiesCreated++;
     }
 
+    console.log(`Created ${enemies.length} enemies`);
     enemiesRef.current = enemies;
   };
 
@@ -353,35 +398,37 @@ const MazeGame: React.FC = () => {
       // Update patrol movement
       if (enemy.patrolPath.length > 0) {
         const targetPos = enemy.patrolPath[enemy.currentPathIndex];
-        const dx = targetPos.x - enemy.position.x;
-        const dz = targetPos.z - enemy.position.z;
+        const dx = (targetPos.x - MAZE_SIZE / 2) * WALL_SIZE - enemy.mesh.position.x;
+        const dz = (targetPos.z - MAZE_SIZE / 2) * WALL_SIZE - enemy.mesh.position.z;
         const distance = Math.sqrt(dx * dx + dz * dz);
 
-        if (distance < 0.5) {
+        if (distance < 0.2) {
+          // Reached target point, move to next point in patrol path
           enemy.currentPathIndex = (enemy.currentPathIndex + 1) % enemy.patrolPath.length;
         } else {
-          enemy.position.x += (dx / distance) * enemy.speed;
-          enemy.position.z += (dz / distance) * enemy.speed;
+          // Move toward target point
+          enemy.mesh.position.x += (dx / distance) * enemy.speed;
+          enemy.mesh.position.z += (dz / distance) * enemy.speed;
           
-          enemy.mesh.position.set(
-            (enemy.position.x - MAZE_SIZE / 2) * WALL_SIZE,
-            0.5,
-            (enemy.position.z - MAZE_SIZE / 2) * WALL_SIZE
-          );
+          // Update stored position
+          enemy.position = {
+            x: Math.round((enemy.mesh.position.x + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE),
+            z: Math.round((enemy.mesh.position.z + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE)
+          };
         }
       }
 
-      // Check for player attack
-      const playerDistance = Math.sqrt(
-        Math.pow(playerPos.x - enemy.position.x, 2) + 
-        Math.pow(playerPos.z - enemy.position.z, 2)
-      );
+      // Check for player attack - only if not currently respawning
+      if (!isRespawning) {
+        const playerDistance = Math.sqrt(
+          Math.pow(playerPos.x - enemy.position.x, 2) + 
+          Math.pow(playerPos.z - enemy.position.z, 2)
+        );
 
-      if (playerDistance < ENEMY_ATTACK_RANGE && 
-          currentTime - enemy.lastAttack > ENEMY_ATTACK_COOLDOWN &&
-          !isRespawning) {
-        enemy.lastAttack = currentTime;
-        attackPlayer();
+        if (playerDistance < ENEMY_ATTACK_RANGE && currentTime - enemy.lastAttack > ENEMY_ATTACK_COOLDOWN) {
+          enemy.lastAttack = currentTime;
+          attackPlayer();
+        }
       }
     });
   };
@@ -402,11 +449,17 @@ const MazeGame: React.FC = () => {
   };
 
   const respawnPlayer = () => {
-    if (!cameraRef.current) return;
+    if (!cameraRef.current || isRespawning) return;
     
     setIsRespawning(true);
     
-    setTimeout(() => {
+    // Clear any existing respawn timer
+    if (respawnTimerRef.current) {
+      window.clearTimeout(respawnTimerRef.current);
+    }
+    
+    // Set new respawn timer
+    respawnTimerRef.current = window.setTimeout(() => {
       if (cameraRef.current) {
         cameraRef.current.position.set(
           (currentCheckpoint.x - MAZE_SIZE / 2) * WALL_SIZE,
@@ -416,6 +469,7 @@ const MazeGame: React.FC = () => {
         playerPositionRef.current = { ...currentCheckpoint };
         setIsRespawning(false);
         toast.success("Respawned at checkpoint!");
+        respawnTimerRef.current = null;
       }
     }, RESPAWN_DELAY);
   };
@@ -608,7 +662,7 @@ const MazeGame: React.FC = () => {
     const animate = () => {
       requestAnimationFrame(animate);
 
-      if (controls.isLocked && !gameWon && !gameOver) {
+      if (controls.isLocked && !gameWon && !gameOver && !isRespawning) {
         updateMovement();
         updateEnemies();
         checkCheckpoints();
