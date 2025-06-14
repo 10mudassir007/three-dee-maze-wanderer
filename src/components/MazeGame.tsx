@@ -19,6 +19,8 @@ interface Enemy {
   patrolPath: Position[];
   currentPathIndex: number;
   speed: number;
+  isAttacking: boolean;
+  attackStartTime: number;
 }
 
 interface Checkpoint {
@@ -162,6 +164,7 @@ const MazeGame: React.FC = () => {
   const ENEMY_SPEED = 0.02;
   const ENEMY_ATTACK_RANGE = 2;
   const ENEMY_ATTACK_COOLDOWN = 3000;
+  const ENEMY_ATTACK_DURATION = 1000; // Attack lasts 1 second
   const RESPAWN_DELAY = 2000;
   const ENEMY_COUNT = 4;
   const MIN_SPAWN_DISTANCE = 8; // Minimum distance for enemy spawns from player
@@ -423,7 +426,9 @@ const MazeGame: React.FC = () => {
         lastAttack: 0,
         patrolPath,
         currentPathIndex: 0,
-        speed: ENEMY_SPEED * (0.8 + Math.random() * 0.4)
+        speed: ENEMY_SPEED * (0.8 + Math.random() * 0.4),
+        isAttacking: false,
+        attackStartTime: 0
       });
       
       usedPositions.push({ x, z });
@@ -495,6 +500,7 @@ const MazeGame: React.FC = () => {
     const playerPos = playerPositionRef.current;
 
     enemiesRef.current.forEach(enemy => {
+      // Handle patrol movement
       if (enemy.patrolPath.length > 0) {
         const targetPos = enemy.patrolPath[enemy.currentPathIndex];
         const dx = (targetPos.x - MAZE_SIZE / 2) * WALL_SIZE - enemy.mesh.position.x;
@@ -520,9 +526,48 @@ const MazeGame: React.FC = () => {
           Math.pow(playerPos.z - enemy.position.z, 2)
         );
 
-        if (playerDistance < ENEMY_ATTACK_RANGE && currentTime - enemy.lastAttack > ENEMY_ATTACK_COOLDOWN) {
-          enemy.lastAttack = currentTime;
-          attackPlayer();
+        // Check if player is within attack range
+        if (playerDistance < ENEMY_ATTACK_RANGE) {
+          // Start attack if not already attacking and cooldown has passed
+          if (!enemy.isAttacking && currentTime - enemy.lastAttack > ENEMY_ATTACK_COOLDOWN) {
+            enemy.isAttacking = true;
+            enemy.attackStartTime = currentTime;
+            enemy.mesh.material = new THREE.MeshLambertMaterial({ 
+              color: 0xff4444,
+              emissive: 0x660000
+            });
+          }
+          
+          // Execute attack if currently attacking and within attack duration
+          if (enemy.isAttacking && currentTime - enemy.attackStartTime >= ENEMY_ATTACK_DURATION) {
+            enemy.lastAttack = currentTime;
+            enemy.isAttacking = false;
+            enemy.mesh.material = new THREE.MeshLambertMaterial({ 
+              color: 0xff0000,
+              emissive: 0x440000
+            });
+            attackPlayer();
+          }
+        } else {
+          // Player escaped - cancel attack
+          if (enemy.isAttacking) {
+            enemy.isAttacking = false;
+            enemy.mesh.material = new THREE.MeshLambertMaterial({ 
+              color: 0xff0000,
+              emissive: 0x440000
+            });
+            console.log(`Player escaped from enemy ${enemy.id} - attack cancelled`);
+          }
+        }
+        
+        // Visual feedback for attacking state
+        if (enemy.isAttacking) {
+          const attackProgress = (currentTime - enemy.attackStartTime) / ENEMY_ATTACK_DURATION;
+          const intensity = Math.sin(attackProgress * Math.PI * 4) * 0.5 + 0.5;
+          enemy.mesh.material = new THREE.MeshLambertMaterial({ 
+            color: new THREE.Color().setRGB(1, 0.2 + intensity * 0.3, 0.2 + intensity * 0.3),
+            emissive: new THREE.Color().setRGB(0.6 + intensity * 0.4, 0, 0)
+          });
         }
       }
     });
@@ -1009,7 +1054,8 @@ const MazeGame: React.FC = () => {
       return true;
     }
 
-    const buffer = 0.3;
+    // Reduced buffer for smoother wall interaction
+    const buffer = 0.1;
     const checkPositions = [
       { x: mazeX, z: mazeZ },
       { x: Math.floor((position.x + buffer + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE), z: mazeZ },
