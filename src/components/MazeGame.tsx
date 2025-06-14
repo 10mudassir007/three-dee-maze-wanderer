@@ -727,8 +727,13 @@ const MazeGame: React.FC = () => {
     const controls = new PointerLockControls(camera, renderer.domElement);
     controlsRef.current = controls;
 
-    // Improved key handling for both WASD and arrow keys
+    // Enhanced key handling for movement
     const onKeyDown = (event: KeyboardEvent) => {
+      // Prevent default behavior for movement keys
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight'].includes(event.code)) {
+        event.preventDefault();
+      }
+
       switch (event.code) {
         case 'KeyW':
         case 'ArrowUp':
@@ -745,6 +750,11 @@ const MazeGame: React.FC = () => {
         case 'KeyD':
         case 'ArrowRight':
           moveStateRef.current.right = true;
+          break;
+        case 'Escape':
+          if (controls.isLocked) {
+            controls.unlock();
+          }
           break;
       }
     };
@@ -818,7 +828,7 @@ const MazeGame: React.FC = () => {
     };
     animate();
 
-    toast.success("Enhanced Maze Game loaded! Use WASD or Arrow keys to move!");
+    toast.success("Enhanced Maze Game loaded! Click to lock pointer and use WASD or Arrow keys to move!");
 
     return () => {
       document.removeEventListener('keydown', onKeyDown);
@@ -1026,19 +1036,23 @@ const MazeGame: React.FC = () => {
     const camera = cameraRef.current;
     const velocity = new THREE.Vector3();
 
+    // Apply movement based on current move state
     if (moveStateRef.current.forward) velocity.z -= MOVE_SPEED;
     if (moveStateRef.current.backward) velocity.z += MOVE_SPEED;
     if (moveStateRef.current.left) velocity.x -= MOVE_SPEED;
     if (moveStateRef.current.right) velocity.x += MOVE_SPEED;
 
+    // Apply camera rotation to movement vector
     velocity.applyQuaternion(camera.quaternion);
-    velocity.y = 0;
+    velocity.y = 0; // Keep movement horizontal
 
     const newPosition = camera.position.clone().add(velocity);
     
+    // Check collision before moving
     if (!checkCollision(newPosition)) {
       camera.position.add(velocity);
       
+      // Update player position reference
       playerPositionRef.current = {
         x: Math.round((camera.position.x + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE),
         z: Math.round((camera.position.z + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE)
@@ -1093,7 +1107,12 @@ const MazeGame: React.FC = () => {
   };
 
   const startGame = () => {
-    if (controlsRef.current) {
+    if (controlsRef.current && mountRef.current) {
+      // Focus the canvas element to ensure it can receive key events
+      const canvas = mountRef.current.querySelector('canvas');
+      if (canvas) {
+        canvas.focus();
+      }
       controlsRef.current.lock();
     }
   };
