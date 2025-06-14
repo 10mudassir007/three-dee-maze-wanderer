@@ -50,7 +50,8 @@ const MazeGame: React.FC = () => {
           directionalIntensity: 0.8,
           enableShadows: false,
           wallSegments: 1,
-          enableEdgeSmoothing: false
+          enableEdgeSmoothing: false,
+          enableGrass: false
         };
       case 'medium':
         return {
@@ -62,7 +63,8 @@ const MazeGame: React.FC = () => {
           directionalIntensity: 0.9,
           enableShadows: true,
           wallSegments: 2,
-          enableEdgeSmoothing: true
+          enableEdgeSmoothing: true,
+          enableGrass: false
         };
       case 'high':
         return {
@@ -74,7 +76,8 @@ const MazeGame: React.FC = () => {
           directionalIntensity: 1.0,
           enableShadows: true,
           wallSegments: 4,
-          enableEdgeSmoothing: true
+          enableEdgeSmoothing: true,
+          enableGrass: true
         };
     }
   };
@@ -115,11 +118,19 @@ const MazeGame: React.FC = () => {
     scene.add(ambientLight);
 
     const directionalLight = new THREE.DirectionalLight(0xffffff, settings.directionalIntensity);
-    directionalLight.position.set(10, 10, 5);
+    directionalLight.position.set(10, 20, 10);
     if (settings.enableShadows) {
       directionalLight.castShadow = true;
       directionalLight.shadow.mapSize.width = settings.shadowMapSize;
       directionalLight.shadow.mapSize.height = settings.shadowMapSize;
+      // Improve shadow camera bounds to prevent shadow artifacts
+      directionalLight.shadow.camera.near = 0.1;
+      directionalLight.shadow.camera.far = 50;
+      directionalLight.shadow.camera.left = -25;
+      directionalLight.shadow.camera.right = 25;
+      directionalLight.shadow.camera.top = 25;
+      directionalLight.shadow.camera.bottom = -25;
+      directionalLight.shadow.bias = -0.001;
     }
     scene.add(directionalLight);
 
@@ -154,6 +165,11 @@ const MazeGame: React.FC = () => {
       ground.receiveShadow = true;
     }
     scene.add(ground);
+
+    // Add grass for high settings
+    if (settings.enableGrass) {
+      createGrass(scene, maze, settings);
+    }
 
     // PointerLockControls
     const controls = new PointerLockControls(camera, renderer.domElement);
@@ -239,7 +255,7 @@ const MazeGame: React.FC = () => {
     return () => {
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('keyup', onKeyUp);
-      window.addEventListener('resize', onResize);
+      window.removeEventListener('resize', onResize);
       
       controls.removeEventListener('lock', onLock);
       controls.removeEventListener('unlock', onUnlock);
@@ -372,6 +388,49 @@ const MazeGame: React.FC = () => {
     return texture;
   };
 
+  const createGrass = (scene: THREE.Scene, maze: number[][], settings: any) => {
+    const grassGroup = new THREE.Group();
+    
+    for (let z = 0; z < maze.length; z++) {
+      for (let x = 0; x < maze[z].length; x++) {
+        if (maze[z][x] === 0) { // Only on empty spaces
+          const grassCount = Math.random() * 15 + 5; // 5-20 grass blades per cell
+          
+          for (let i = 0; i < grassCount; i++) {
+            const grassGeometry = new THREE.CylinderGeometry(0.01, 0.02, 0.3, 3);
+            const grassMaterial = new THREE.MeshLambertMaterial({ 
+              color: new THREE.Color().setHSL(0.25 + Math.random() * 0.1, 0.8, 0.4 + Math.random() * 0.2)
+            });
+            const grassBlade = new THREE.Mesh(grassGeometry, grassMaterial);
+            
+            // Random position within the cell
+            const offsetX = (Math.random() - 0.5) * WALL_SIZE * 0.8;
+            const offsetZ = (Math.random() - 0.5) * WALL_SIZE * 0.8;
+            
+            grassBlade.position.set(
+              (x - MAZE_SIZE / 2) * WALL_SIZE + offsetX,
+              0.15,
+              (z - MAZE_SIZE / 2) * WALL_SIZE + offsetZ
+            );
+            
+            // Random rotation and slight bend
+            grassBlade.rotation.y = Math.random() * Math.PI * 2;
+            grassBlade.rotation.x = (Math.random() - 0.5) * 0.2;
+            grassBlade.scale.y = 0.8 + Math.random() * 0.4;
+            
+            if (settings.enableShadows) {
+              grassBlade.castShadow = true;
+            }
+            
+            grassGroup.add(grassBlade);
+          }
+        }
+      }
+    }
+    
+    scene.add(grassGroup);
+  };
+
   const createExitMarker = (scene: THREE.Scene, settings: any) => {
     const exitGeometry = new THREE.CylinderGeometry(0.5, 0.5, 4, 8);
     const exitMaterial = new THREE.MeshLambertMaterial({ 
@@ -385,6 +444,10 @@ const MazeGame: React.FC = () => {
       2,
       (exitPositionRef.current.z - MAZE_SIZE / 2) * WALL_SIZE
     );
+    
+    if (settings.enableShadows) {
+      exitMarker.castShadow = true;
+    }
     
     scene.add(exitMarker);
 
@@ -410,7 +473,7 @@ const MazeGame: React.FC = () => {
     velocity.applyQuaternion(camera.quaternion);
     velocity.y = 0; // Keep movement horizontal
 
-    // Check collision
+    // Check collision with improved detection
     const newPosition = camera.position.clone().add(velocity);
     
     if (!checkCollision(newPosition)) {
@@ -434,8 +497,25 @@ const MazeGame: React.FC = () => {
       return true;
     }
 
-    // Check wall collision
-    return mazeRef.current[mazeZ][mazeX] === 1;
+    // Check wall collision with buffer to prevent see-through
+    const buffer = 0.3;
+    const checkPositions = [
+      { x: mazeX, z: mazeZ },
+      { x: Math.floor((position.x + buffer + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE), z: mazeZ },
+      { x: Math.ceil((position.x - buffer + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE), z: mazeZ },
+      { x: mazeX, z: Math.floor((position.z + buffer + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE) },
+      { x: mazeX, z: Math.ceil((position.z - buffer + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE) }
+    ];
+
+    for (const checkPos of checkPositions) {
+      if (checkPos.x >= 0 && checkPos.x < MAZE_SIZE && checkPos.z >= 0 && checkPos.z < MAZE_SIZE) {
+        if (mazeRef.current[checkPos.z][checkPos.x] === 1) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   };
 
   const checkWinCondition = () => {
