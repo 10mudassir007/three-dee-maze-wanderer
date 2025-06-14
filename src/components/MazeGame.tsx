@@ -160,7 +160,7 @@ const MazeGame: React.FC = () => {
   const MAZE_SIZE = 21;
   const WALL_HEIGHT = 3;
   const WALL_SIZE = 2;
-  const MOVE_SPEED = 0.08; // Reduced for smoother movement
+  const MOVE_SPEED = 0.05; // Slightly reduced for better control
   const ENEMY_SPEED = 0.02;
   const ENEMY_ATTACK_RANGE = 2;
   const ENEMY_ATTACK_COOLDOWN = 3000;
@@ -168,7 +168,7 @@ const MazeGame: React.FC = () => {
   const RESPAWN_DELAY = 2000;
   const ENEMY_COUNT = 4;
   const MIN_SPAWN_DISTANCE = 8; // Minimum distance for enemy spawns from player
-  const COLLISION_RADIUS = 0.3; // Smaller collision radius for smoother movement
+  const COLLISION_RADIUS = 0.4; // Increased for better collision detection
 
   const getEnvironmentSettings = (time: TimeOfDay, weatherType: WeatherType, quality: GraphicsQuality) => {
     const timeSettings = {
@@ -671,9 +671,10 @@ const MazeGame: React.FC = () => {
     rendererRef.current = renderer;
     mountRef.current.appendChild(renderer.domElement);
 
-    // Make canvas focusable
+    // Make canvas focusable and focus it
     renderer.domElement.tabIndex = 0;
     renderer.domElement.style.outline = 'none';
+    renderer.domElement.focus();
 
     const ambientLight = new THREE.AmbientLight(0x404040, settings.ambientIntensity);
     ambientLight.name = 'ambientLight';
@@ -734,28 +735,33 @@ const MazeGame: React.FC = () => {
     const controls = new PointerLockControls(camera, renderer.domElement);
     controlsRef.current = controls;
 
-    // Improved key handling
+    // Improved key handling with better debugging
     const onKeyDown = (event: KeyboardEvent) => {
       if (!controls.isLocked) return;
       
       event.preventDefault();
+      console.log('Key down:', event.code);
 
       switch (event.code) {
         case 'KeyW':
         case 'ArrowUp':
           moveStateRef.current.forward = true;
+          console.log('Moving forward');
           break;
         case 'KeyA':
         case 'ArrowLeft':
           moveStateRef.current.left = true;
+          console.log('Moving left');
           break;
         case 'KeyS':
         case 'ArrowDown':
           moveStateRef.current.backward = true;
+          console.log('Moving backward');
           break;
         case 'KeyD':
         case 'ArrowRight':
           moveStateRef.current.right = true;
+          console.log('Moving right');
           break;
         case 'Escape':
           controls.unlock();
@@ -764,6 +770,7 @@ const MazeGame: React.FC = () => {
     };
 
     const onKeyUp = (event: KeyboardEvent) => {
+      console.log('Key up:', event.code);
       switch (event.code) {
         case 'KeyW':
         case 'ArrowUp':
@@ -792,7 +799,7 @@ const MazeGame: React.FC = () => {
       }
     };
 
-    // Add event listeners
+    // Add event listeners to document for global key capture
     document.addEventListener('keydown', onKeyDown, false);
     document.addEventListener('keyup', onKeyUp, false);
     window.addEventListener('resize', onResize);
@@ -800,6 +807,8 @@ const MazeGame: React.FC = () => {
     const onLock = () => {
       console.log('Pointer locked - movement enabled');
       setIsLocked(true);
+      // Focus the canvas when locked
+      renderer.domElement.focus();
     };
     const onUnlock = () => {
       console.log('Pointer unlocked - movement disabled');
@@ -1050,39 +1059,43 @@ const MazeGame: React.FC = () => {
       const euler = new THREE.Euler(0, camera.rotation.y, 0);
       moveVector.applyEuler(euler);
 
-      // Calculate new position
-      const newPosition = camera.position.clone().add(moveVector);
+      // Store original position
+      const originalPosition = camera.position.clone();
       
-      // Check collision for new position
+      // Try moving in both directions at once
+      const newPosition = originalPosition.clone().add(moveVector);
+      
       if (!checkCollision(newPosition)) {
+        // Full movement is safe
         camera.position.copy(newPosition);
-        
-        // Update player position reference
-        playerPositionRef.current = {
-          x: Math.round((camera.position.x + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE),
-          z: Math.round((camera.position.z + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE)
-        };
       } else {
-        // Try moving only on X axis
-        const xOnlyPosition = camera.position.clone();
+        // Try X movement only
+        const xOnlyPosition = originalPosition.clone();
         xOnlyPosition.x += moveVector.x;
+        
         if (!checkCollision(xOnlyPosition)) {
           camera.position.x = xOnlyPosition.x;
         }
 
-        // Try moving only on Z axis
-        const zOnlyPosition = camera.position.clone();
+        // Try Z movement only
+        const zOnlyPosition = originalPosition.clone();
         zOnlyPosition.z += moveVector.z;
+        
         if (!checkCollision(zOnlyPosition)) {
           camera.position.z = zOnlyPosition.z;
         }
-
-        // Update player position even with partial movement
-        playerPositionRef.current = {
-          x: Math.round((camera.position.x + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE),
-          z: Math.round((camera.position.z + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE)
-        };
       }
+
+      // Update player position reference
+      playerPositionRef.current = {
+        x: Math.round((camera.position.x + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE),
+        z: Math.round((camera.position.z + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE)
+      };
+      
+      console.log('Player position:', playerPositionRef.current, 'World pos:', {
+        x: camera.position.x.toFixed(2),
+        z: camera.position.z.toFixed(2)
+      });
     }
   };
 
@@ -1091,31 +1104,35 @@ const MazeGame: React.FC = () => {
     const mazeX = (position.x + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE;
     const mazeZ = (position.z + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE;
 
-    // Check boundaries
-    if (mazeX < 0.5 || mazeX >= MAZE_SIZE - 0.5 || mazeZ < 0.5 || mazeZ >= MAZE_SIZE - 0.5) {
+    // Check boundaries with margin
+    const margin = COLLISION_RADIUS;
+    if (mazeX < margin || mazeX >= MAZE_SIZE - margin || 
+        mazeZ < margin || mazeZ >= MAZE_SIZE - margin) {
+      console.log('Boundary collision at:', mazeX.toFixed(2), mazeZ.toFixed(2));
       return true;
     }
 
-    // Check collision with walls using a smaller radius
-    const checkRadius = COLLISION_RADIUS;
+    // Check collision with walls using a more thorough approach
     const checkPositions = [
       { x: mazeX, z: mazeZ }, // Center
-      { x: mazeX + checkRadius, z: mazeZ }, // Right
-      { x: mazeX - checkRadius, z: mazeZ }, // Left
-      { x: mazeX, z: mazeZ + checkRadius }, // Forward
-      { x: mazeX, z: mazeZ - checkRadius }, // Backward
-      { x: mazeX + checkRadius, z: mazeZ + checkRadius }, // Top-right
-      { x: mazeX - checkRadius, z: mazeZ + checkRadius }, // Top-left
-      { x: mazeX + checkRadius, z: mazeZ - checkRadius }, // Bottom-right
-      { x: mazeX - checkRadius, z: mazeZ - checkRadius }  // Bottom-left
+      { x: mazeX + COLLISION_RADIUS, z: mazeZ }, // Right
+      { x: mazeX - COLLISION_RADIUS, z: mazeZ }, // Left
+      { x: mazeX, z: mazeZ + COLLISION_RADIUS }, // Forward
+      { x: mazeX, z: mazeZ - COLLISION_RADIUS }, // Backward
+      { x: mazeX + COLLISION_RADIUS * 0.7, z: mazeZ + COLLISION_RADIUS * 0.7 }, // Diagonal corners
+      { x: mazeX - COLLISION_RADIUS * 0.7, z: mazeZ + COLLISION_RADIUS * 0.7 },
+      { x: mazeX + COLLISION_RADIUS * 0.7, z: mazeZ - COLLISION_RADIUS * 0.7 },
+      { x: mazeX - COLLISION_RADIUS * 0.7, z: mazeZ - COLLISION_RADIUS * 0.7 }
     ];
 
     for (const checkPos of checkPositions) {
       const gridX = Math.floor(checkPos.x);
       const gridZ = Math.floor(checkPos.z);
       
+      // Ensure we're within maze bounds
       if (gridX >= 0 && gridX < MAZE_SIZE && gridZ >= 0 && gridZ < MAZE_SIZE) {
         if (mazeRef.current[gridZ][gridX] === 1) {
+          console.log('Wall collision detected at grid:', gridX, gridZ, 'check pos:', checkPos.x.toFixed(2), checkPos.z.toFixed(2));
           return true;
         }
       }
