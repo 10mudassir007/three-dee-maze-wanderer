@@ -1,10 +1,9 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { MazeGenerator } from '../utils/mazeGenerator';
 import { toast } from 'sonner';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Settings } from 'lucide-react';
+import { Settings, Cloud, Sun, CloudRain, CloudSnow } from 'lucide-react';
 
 interface Position {
   x: number;
@@ -12,6 +11,8 @@ interface Position {
 }
 
 type GraphicsQuality = 'low' | 'medium' | 'high';
+type TimeOfDay = 'day' | 'night' | 'sunset' | 'dawn';
+type WeatherType = 'sunny' | 'cloudy' | 'rainy' | 'snowy';
 
 const MazeGame: React.FC = () => {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -19,6 +20,8 @@ const MazeGame: React.FC = () => {
   const [isLocked, setIsLocked] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [graphicsQuality, setGraphicsQuality] = useState<GraphicsQuality>('low');
+  const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>('day');
+  const [weather, setWeather] = useState<WeatherType>('sunny');
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -38,6 +41,74 @@ const MazeGame: React.FC = () => {
   const WALL_HEIGHT = 3;
   const WALL_SIZE = 2;
   const MOVE_SPEED = 0.1;
+
+  const getEnvironmentSettings = (time: TimeOfDay, weatherType: WeatherType, quality: GraphicsQuality) => {
+    const timeSettings = {
+      day: {
+        skyColor: 0x87CEEB,
+        fogColor: 0x87CEEB,
+        ambientIntensity: 0.4,
+        directionalIntensity: 1.0,
+        directionalColor: 0xffffff,
+        groundColor: 0x90EE90
+      },
+      night: {
+        skyColor: 0x191970,
+        fogColor: 0x191970,
+        ambientIntensity: 0.1,
+        directionalIntensity: 0.3,
+        directionalColor: 0x6495ED,
+        groundColor: 0x2F4F2F
+      },
+      sunset: {
+        skyColor: 0xFF6347,
+        fogColor: 0xFF6347,
+        ambientIntensity: 0.3,
+        directionalIntensity: 0.7,
+        directionalColor: 0xFFA500,
+        groundColor: 0x8FBC8F
+      },
+      dawn: {
+        skyColor: 0xFFB6C1,
+        fogColor: 0xFFB6C1,
+        ambientIntensity: 0.2,
+        directionalIntensity: 0.5,
+        directionalColor: 0xFFE4B5,
+        groundColor: 0x98FB98
+      }
+    };
+
+    const weatherSettings = {
+      sunny: {
+        fogDensity: 1.0,
+        fogNear: 10,
+        precipitation: false
+      },
+      cloudy: {
+        fogDensity: 0.7,
+        fogNear: 8,
+        precipitation: false
+      },
+      rainy: {
+        fogDensity: 0.5,
+        fogNear: 6,
+        precipitation: true,
+        precipitationType: 'rain'
+      },
+      snowy: {
+        fogDensity: 0.4,
+        fogNear: 5,
+        precipitation: true,
+        precipitationType: 'snow'
+      }
+    };
+
+    return {
+      ...timeSettings[time],
+      ...weatherSettings[weatherType],
+      ...getGraphicsSettings(quality)
+    };
+  };
 
   const getGraphicsSettings = (quality: GraphicsQuality) => {
     switch (quality) {
@@ -83,15 +154,79 @@ const MazeGame: React.FC = () => {
     }
   };
 
+  const updateEnvironment = () => {
+    if (!sceneRef.current || !rendererRef.current) return;
+
+    const settings = getEnvironmentSettings(timeOfDay, weather, graphicsQuality);
+    const scene = sceneRef.current;
+
+    scene.background = new THREE.Color(settings.skyColor);
+    scene.fog = new THREE.Fog(settings.fogColor, settings.fogNear, settings.fogFar * settings.fogDensity);
+
+    const ambientLight = scene.getObjectByName('ambientLight') as THREE.AmbientLight;
+    const directionalLight = scene.getObjectByName('directionalLight') as THREE.DirectionalLight;
+
+    if (ambientLight) {
+      ambientLight.intensity = settings.ambientIntensity;
+    }
+
+    if (directionalLight) {
+      directionalLight.intensity = settings.directionalIntensity;
+      directionalLight.color.setHex(settings.directionalColor);
+    }
+
+    const ground = scene.getObjectByName('ground') as THREE.Mesh;
+    if (ground && ground.material instanceof THREE.MeshLambertMaterial) {
+      ground.material.color.setHex(settings.groundColor);
+    }
+
+    handlePrecipitation(scene, settings);
+  };
+
+  const handlePrecipitation = (scene: THREE.Scene, settings: any) => {
+    const existingPrecipitation = scene.getObjectByName('precipitation');
+    if (existingPrecipitation) {
+      scene.remove(existingPrecipitation);
+    }
+
+    if (!settings.precipitation) return;
+
+    const precipitationGroup = new THREE.Group();
+    precipitationGroup.name = 'precipitation';
+
+    const particleCount = 1000;
+    const particles = new THREE.BufferGeometry();
+    const positions = new Float32Array(particleCount * 3);
+
+    for (let i = 0; i < particleCount * 3; i += 3) {
+      positions[i] = (Math.random() - 0.5) * 100;
+      positions[i + 1] = Math.random() * 50 + 10;
+      positions[i + 2] = (Math.random() - 0.5) * 100;
+    }
+
+    particles.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+    const material = new THREE.PointsMaterial({
+      color: settings.precipitationType === 'snow' ? 0xffffff : 0x0066ff,
+      size: settings.precipitationType === 'snow' ? 0.1 : 0.05,
+      transparent: true,
+      opacity: 0.6
+    });
+
+    const precipitationMesh = new THREE.Points(particles, material);
+    precipitationGroup.add(precipitationMesh);
+    scene.add(precipitationGroup);
+  };
+
   useEffect(() => {
     if (!mountRef.current) return;
 
-    const settings = getGraphicsSettings(graphicsQuality);
+    const settings = getEnvironmentSettings(timeOfDay, weather, graphicsQuality);
 
     // Initialize Three.js scene
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x87CEEB);
-    scene.fog = new THREE.Fog(0x87CEEB, 10, settings.fogFar);
+    scene.background = new THREE.Color(settings.skyColor);
+    scene.fog = new THREE.Fog(settings.fogColor, settings.fogNear, settings.fogFar * settings.fogDensity);
     sceneRef.current = scene;
 
     // Camera setup
@@ -114,17 +249,18 @@ const MazeGame: React.FC = () => {
     rendererRef.current = renderer;
     mountRef.current.appendChild(renderer.domElement);
 
-    // Lighting
+    // Lighting with names for easy updates
     const ambientLight = new THREE.AmbientLight(0x404040, settings.ambientIntensity);
+    ambientLight.name = 'ambientLight';
     scene.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, settings.directionalIntensity);
+    const directionalLight = new THREE.DirectionalLight(settings.directionalColor, settings.directionalIntensity);
+    directionalLight.name = 'directionalLight';
     directionalLight.position.set(10, 20, 10);
     if (settings.enableShadows) {
       directionalLight.castShadow = true;
       directionalLight.shadow.mapSize.width = settings.shadowMapSize;
       directionalLight.shadow.mapSize.height = settings.shadowMapSize;
-      // Improve shadow camera bounds to prevent shadow artifacts
       directionalLight.shadow.camera.near = 0.1;
       directionalLight.shadow.camera.far = 50;
       directionalLight.shadow.camera.left = -25;
@@ -140,7 +276,6 @@ const MazeGame: React.FC = () => {
     const maze = mazeGenerator.generate();
     mazeRef.current = maze;
 
-    // Find exit position (bottom-right area)
     let exitFound = false;
     for (let x = MAZE_SIZE - 2; x >= MAZE_SIZE - 4 && !exitFound; x--) {
       for (let z = MAZE_SIZE - 2; z >= MAZE_SIZE - 4 && !exitFound; z--) {
@@ -157,20 +292,23 @@ const MazeGame: React.FC = () => {
     // Create exit marker
     createExitMarker(scene, settings);
 
-    // Ground
+    // Ground with name for easy updates
     const groundGeometry = new THREE.PlaneGeometry(MAZE_SIZE * WALL_SIZE, MAZE_SIZE * WALL_SIZE);
-    const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x90EE90 });
+    const groundMaterial = new THREE.MeshLambertMaterial({ color: settings.groundColor });
     const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+    ground.name = 'ground';
     ground.rotation.x = -Math.PI / 2;
     if (settings.enableShadows) {
       ground.receiveShadow = true;
     }
     scene.add(ground);
 
-    // Add grass for high settings
     if (settings.enableGrass) {
       createGrass(scene, maze, settings);
     }
+
+    // Handle precipitation
+    handlePrecipitation(scene, settings);
 
     // PointerLockControls
     const controls = new PointerLockControls(camera, renderer.domElement);
@@ -231,7 +369,6 @@ const MazeGame: React.FC = () => {
     document.addEventListener('keyup', onKeyUp);
     window.addEventListener('resize', onResize);
 
-    // Pointer lock events
     const onLock = () => setIsLocked(true);
     const onUnlock = () => setIsLocked(false);
     
@@ -245,6 +382,22 @@ const MazeGame: React.FC = () => {
       if (controls.isLocked && !gameWon) {
         updateMovement();
         checkWinCondition();
+      }
+
+      const precipitation = scene.getObjectByName('precipitation');
+      if (precipitation) {
+        precipitation.children.forEach((child) => {
+          if (child instanceof THREE.Points) {
+            const positions = child.geometry.attributes.position.array as Float32Array;
+            for (let i = 1; i < positions.length; i += 3) {
+              positions[i] -= weather === 'snowy' ? 0.1 : 0.3;
+              if (positions[i] < 0) {
+                positions[i] = 50;
+              }
+            }
+            child.geometry.attributes.position.needsUpdate = true;
+          }
+        });
       }
 
       renderer.render(scene, camera);
@@ -266,10 +419,13 @@ const MazeGame: React.FC = () => {
       }
       renderer.dispose();
     };
-  }, [graphicsQuality]);
+  }, [graphicsQuality, timeOfDay, weather]);
+
+  useEffect(() => {
+    updateEnvironment();
+  }, [timeOfDay, weather]);
 
   const createMaze = (scene: THREE.Scene, maze: number[][], settings: any) => {
-    // Create enhanced wall geometry for better quality
     const wallGeometry = new THREE.BoxGeometry(
       WALL_SIZE, 
       WALL_HEIGHT, 
@@ -284,7 +440,6 @@ const MazeGame: React.FC = () => {
       map: createBrickTexture(settings)
     });
 
-    // Add edge enhancement for medium/high quality
     if (settings.enableEdgeSmoothing) {
       const edges = new THREE.EdgesGeometry(wallGeometry);
       const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x654321 });
@@ -318,7 +473,6 @@ const MazeGame: React.FC = () => {
         }
       }
     } else {
-      // Standard walls for low quality
       wallsRef.current = [];
 
       for (let z = 0; z < maze.length; z++) {
@@ -349,12 +503,10 @@ const MazeGame: React.FC = () => {
     canvas.height = size;
     const ctx = canvas.getContext('2d')!;
     
-    // Create enhanced brick pattern for higher quality
     ctx.fillStyle = '#8B4513';
     ctx.fillRect(0, 0, size, size);
     
     if (settings.enableEdgeSmoothing) {
-      // Add more detailed brick pattern
       ctx.fillStyle = '#A0522D';
       for (let y = 0; y < size; y += size / 8) {
         for (let x = 0; x < size; x += size / 4) {
@@ -363,7 +515,6 @@ const MazeGame: React.FC = () => {
         }
       }
       
-      // Add mortar lines
       ctx.strokeStyle = '#654321';
       ctx.lineWidth = 1;
       for (let y = 0; y < size; y += size / 8) {
@@ -373,7 +524,6 @@ const MazeGame: React.FC = () => {
         ctx.stroke();
       }
     } else {
-      // Simple brick pattern for low quality
       ctx.fillStyle = '#A0522D';
       ctx.fillRect(0, 0, size / 2, size / 4);
       ctx.fillRect(size / 2, size / 4, size / 2, size / 4);
@@ -394,8 +544,8 @@ const MazeGame: React.FC = () => {
     
     for (let z = 0; z < maze.length; z++) {
       for (let x = 0; x < maze[z].length; x++) {
-        if (maze[z][x] === 0) { // Only on empty spaces
-          const grassCount = Math.random() * 15 + 5; // 5-20 grass blades per cell
+        if (maze[z][x] === 0) {
+          const grassCount = Math.random() * 15 + 5;
           
           for (let i = 0; i < grassCount; i++) {
             const grassGeometry = new THREE.CylinderGeometry(0.01, 0.02, 0.3, 3);
@@ -404,7 +554,6 @@ const MazeGame: React.FC = () => {
             });
             const grassBlade = new THREE.Mesh(grassGeometry, grassMaterial);
             
-            // Random position within the cell
             const offsetX = (Math.random() - 0.5) * WALL_SIZE * 0.8;
             const offsetZ = (Math.random() - 0.5) * WALL_SIZE * 0.8;
             
@@ -414,7 +563,6 @@ const MazeGame: React.FC = () => {
               (z - MAZE_SIZE / 2) * WALL_SIZE + offsetZ
             );
             
-            // Random rotation and slight bend
             grassBlade.rotation.y = Math.random() * Math.PI * 2;
             grassBlade.rotation.x = (Math.random() - 0.5) * 0.2;
             grassBlade.scale.y = 0.8 + Math.random() * 0.4;
@@ -452,7 +600,6 @@ const MazeGame: React.FC = () => {
     
     scene.add(exitMarker);
 
-    // Add glowing effect
     const exitLight = new THREE.PointLight(0xFF6B6B, 1, 10);
     exitLight.position.copy(exitMarker.position);
     exitLight.position.y += 1;
@@ -470,17 +617,14 @@ const MazeGame: React.FC = () => {
     if (moveStateRef.current.left) velocity.x -= MOVE_SPEED;
     if (moveStateRef.current.right) velocity.x += MOVE_SPEED;
 
-    // Apply camera rotation to movement
     velocity.applyQuaternion(camera.quaternion);
-    velocity.y = 0; // Keep movement horizontal
+    velocity.y = 0;
 
-    // Check collision with improved detection
     const newPosition = camera.position.clone().add(velocity);
     
     if (!checkCollision(newPosition)) {
       camera.position.add(velocity);
       
-      // Update player position for win condition
       playerPositionRef.current = {
         x: Math.round((camera.position.x + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE),
         z: Math.round((camera.position.z + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE)
@@ -489,16 +633,13 @@ const MazeGame: React.FC = () => {
   };
 
   const checkCollision = (position: THREE.Vector3): boolean => {
-    // Convert world position to maze coordinates
     const mazeX = Math.round((position.x + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE);
     const mazeZ = Math.round((position.z + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE);
 
-    // Check bounds
     if (mazeX < 0 || mazeX >= MAZE_SIZE || mazeZ < 0 || mazeZ >= MAZE_SIZE) {
       return true;
     }
 
-    // Check wall collision with buffer to prevent see-through
     const buffer = 0.3;
     const checkPositions = [
       { x: mazeX, z: mazeZ },
@@ -554,6 +695,25 @@ const MazeGame: React.FC = () => {
     toast.success(`Graphics quality set to ${quality}`);
   };
 
+  const handleTimeChange = (time: TimeOfDay) => {
+    setTimeOfDay(time);
+    toast.success(`Time set to ${time}`);
+  };
+
+  const handleWeatherChange = (weatherType: WeatherType) => {
+    setWeather(weatherType);
+    toast.success(`Weather set to ${weatherType}`);
+  };
+
+  const getWeatherIcon = (weatherType: WeatherType) => {
+    switch (weatherType) {
+      case 'sunny': return <Sun size={16} />;
+      case 'cloudy': return <Cloud size={16} />;
+      case 'rainy': return <CloudRain size={16} />;
+      case 'snowy': return <CloudSnow size={16} />;
+    }
+  };
+
   return (
     <div className="relative w-full h-screen">
       <div ref={mountRef} className="w-full h-full" />
@@ -571,19 +731,71 @@ const MazeGame: React.FC = () => {
       {/* Settings Panel */}
       {showSettings && isLocked && !gameWon && (
         <div className="absolute top-16 right-4 bg-black bg-opacity-80 text-white p-4 rounded">
-          <h3 className="text-lg font-bold mb-3">Graphics Settings</h3>
-          <div className="space-y-2">
-            <label className="text-sm">Quality:</label>
-            <Select value={graphicsQuality} onValueChange={handleGraphicsChange}>
-              <SelectTrigger className="w-32 bg-gray-700 border-gray-600 text-white">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="low">Low</SelectItem>
-                <SelectItem value="medium">Medium</SelectItem>
-                <SelectItem value="high">High</SelectItem>
-              </SelectContent>
-            </Select>
+          <h3 className="text-lg font-bold mb-3">Game Settings</h3>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm block mb-1">Graphics Quality:</label>
+              <Select value={graphicsQuality} onValueChange={handleGraphicsChange}>
+                <SelectTrigger className="w-36 bg-gray-700 border-gray-600 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="low">Low</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div>
+              <label className="text-sm block mb-1">Time of Day:</label>
+              <Select value={timeOfDay} onValueChange={handleTimeChange}>
+                <SelectTrigger className="w-36 bg-gray-700 border-gray-600 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="day">Day</SelectItem>
+                  <SelectItem value="night">Night</SelectItem>
+                  <SelectItem value="sunset">Sunset</SelectItem>
+                  <SelectItem value="dawn">Dawn</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div>
+              <label className="text-sm block mb-1">Weather:</label>
+              <Select value={weather} onValueChange={handleWeatherChange}>
+                <SelectTrigger className="w-36 bg-gray-700 border-gray-600 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="sunny">
+                    <div className="flex items-center gap-2">
+                      <Sun size={16} />
+                      Sunny
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="cloudy">
+                    <div className="flex items-center gap-2">
+                      <Cloud size={16} />
+                      Cloudy
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="rainy">
+                    <div className="flex items-center gap-2">
+                      <CloudRain size={16} />
+                      Rainy
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="snowy">
+                    <div className="flex items-center gap-2">
+                      <CloudSnow size={16} />
+                      Snowy
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </div>
       )}
@@ -596,18 +808,70 @@ const MazeGame: React.FC = () => {
             <p className="mb-4 text-sm text-gray-600">
               Use WASD or arrow keys to move, mouse to look around
             </p>
-            <div className="mb-6">
-              <label className="block text-sm font-medium mb-2">Graphics Quality:</label>
-              <Select value={graphicsQuality} onValueChange={handleGraphicsChange}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="low">Low (Best Performance)</SelectItem>
-                  <SelectItem value="medium">Medium (Balanced)</SelectItem>
-                  <SelectItem value="high">High (Best Quality)</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="mb-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">Graphics Quality:</label>
+                <Select value={graphicsQuality} onValueChange={handleGraphicsChange}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">Low (Best Performance)</SelectItem>
+                    <SelectItem value="medium">Medium (Balanced)</SelectItem>
+                    <SelectItem value="high">High (Best Quality)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium mb-2">Time of Day:</label>
+                <Select value={timeOfDay} onValueChange={handleTimeChange}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="day">Day</SelectItem>
+                    <SelectItem value="night">Night</SelectItem>
+                    <SelectItem value="sunset">Sunset</SelectItem>
+                    <SelectItem value="dawn">Dawn</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium mb-2">Weather:</label>
+                <Select value={weather} onValueChange={handleWeatherChange}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="sunny">
+                      <div className="flex items-center gap-2">
+                        <Sun size={16} />
+                        Sunny
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="cloudy">
+                      <div className="flex items-center gap-2">
+                        <Cloud size={16} />
+                        Cloudy
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="rainy">
+                      <div className="flex items-center gap-2">
+                        <CloudRain size={16} />
+                        Rainy
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="snowy">
+                      <div className="flex items-center gap-2">
+                        <CloudSnow size={16} />
+                        Snowy
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <button
               onClick={startGame}
@@ -638,7 +902,16 @@ const MazeGame: React.FC = () => {
         <div className="absolute top-4 left-4 bg-black bg-opacity-50 text-white p-3 rounded">
           <p>Find the red exit marker!</p>
           <p className="text-sm">Press ESC to unlock mouse</p>
-          <p className="text-xs mt-1">Quality: {graphicsQuality}</p>
+          <div className="text-xs mt-1 space-y-1">
+            <p>Quality: {graphicsQuality}</p>
+            <div className="flex items-center gap-1">
+              <span>Time: {timeOfDay}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              {getWeatherIcon(weather)}
+              <span>Weather: {weather}</span>
+            </div>
+          </div>
         </div>
       )}
     </div>
