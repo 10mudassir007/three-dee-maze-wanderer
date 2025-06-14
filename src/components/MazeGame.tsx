@@ -48,7 +48,9 @@ const MazeGame: React.FC = () => {
           fogFar: 30,
           ambientIntensity: 0.6,
           directionalIntensity: 0.8,
-          enableShadows: false
+          enableShadows: false,
+          wallSegments: 1,
+          enableEdgeSmoothing: false
         };
       case 'medium':
         return {
@@ -58,7 +60,9 @@ const MazeGame: React.FC = () => {
           fogFar: 40,
           ambientIntensity: 0.4,
           directionalIntensity: 0.9,
-          enableShadows: true
+          enableShadows: true,
+          wallSegments: 2,
+          enableEdgeSmoothing: true
         };
       case 'high':
         return {
@@ -68,7 +72,9 @@ const MazeGame: React.FC = () => {
           fogFar: 50,
           ambientIntensity: 0.3,
           directionalIntensity: 1.0,
-          enableShadows: true
+          enableShadows: true,
+          wallSegments: 4,
+          enableEdgeSmoothing: true
         };
     }
   };
@@ -209,8 +215,11 @@ const MazeGame: React.FC = () => {
     window.addEventListener('resize', onResize);
 
     // Pointer lock events
-    controls.addEventListener('lock', () => setIsLocked(true));
-    controls.addEventListener('unlock', () => setIsLocked(false));
+    const onLock = () => setIsLocked(true);
+    const onUnlock = () => setIsLocked(false);
+    
+    controls.addEventListener('lock', onLock);
+    controls.addEventListener('unlock', onUnlock);
 
     // Animation loop
     const animate = () => {
@@ -230,7 +239,10 @@ const MazeGame: React.FC = () => {
     return () => {
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('resize', onResize);
+      window.addEventListener('resize', onResize);
+      
+      controls.removeEventListener('lock', onLock);
+      controls.removeEventListener('unlock', onUnlock);
       
       if (mountRef.current && renderer.domElement) {
         mountRef.current.removeChild(renderer.domElement);
@@ -240,54 +252,122 @@ const MazeGame: React.FC = () => {
   }, [graphicsQuality]);
 
   const createMaze = (scene: THREE.Scene, maze: number[][], settings: any) => {
-    const wallGeometry = new THREE.BoxGeometry(WALL_SIZE, WALL_HEIGHT, WALL_SIZE);
+    // Create enhanced wall geometry for better quality
+    const wallGeometry = new THREE.BoxGeometry(
+      WALL_SIZE, 
+      WALL_HEIGHT, 
+      WALL_SIZE,
+      settings.wallSegments,
+      settings.wallSegments,
+      settings.wallSegments
+    );
+    
     const wallMaterial = new THREE.MeshLambertMaterial({ 
       color: 0x8B4513,
-      map: createBrickTexture()
+      map: createBrickTexture(settings)
     });
 
-    wallsRef.current = [];
+    // Add edge enhancement for medium/high quality
+    if (settings.enableEdgeSmoothing) {
+      const edges = new THREE.EdgesGeometry(wallGeometry);
+      const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x654321 });
+      
+      wallsRef.current = [];
 
-    for (let z = 0; z < maze.length; z++) {
-      for (let x = 0; x < maze[z].length; x++) {
-        if (maze[z][x] === 1) {
-          const wall = new THREE.Mesh(wallGeometry, wallMaterial);
-          wall.position.set(
-            (x - MAZE_SIZE / 2) * WALL_SIZE,
-            WALL_HEIGHT / 2,
-            (z - MAZE_SIZE / 2) * WALL_SIZE
-          );
-          if (settings.enableShadows) {
-            wall.castShadow = true;
-            wall.receiveShadow = true;
+      for (let z = 0; z < maze.length; z++) {
+        for (let x = 0; x < maze[z].length; x++) {
+          if (maze[z][x] === 1) {
+            const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+            const wireframe = new THREE.LineSegments(edges, edgeMaterial);
+            
+            const position = new THREE.Vector3(
+              (x - MAZE_SIZE / 2) * WALL_SIZE,
+              WALL_HEIGHT / 2,
+              (z - MAZE_SIZE / 2) * WALL_SIZE
+            );
+            
+            wall.position.copy(position);
+            wireframe.position.copy(position);
+            
+            if (settings.enableShadows) {
+              wall.castShadow = true;
+              wall.receiveShadow = true;
+            }
+            
+            scene.add(wall);
+            scene.add(wireframe);
+            wallsRef.current.push(wall);
           }
-          scene.add(wall);
-          wallsRef.current.push(wall);
+        }
+      }
+    } else {
+      // Standard walls for low quality
+      wallsRef.current = [];
+
+      for (let z = 0; z < maze.length; z++) {
+        for (let x = 0; x < maze[z].length; x++) {
+          if (maze[z][x] === 1) {
+            const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+            wall.position.set(
+              (x - MAZE_SIZE / 2) * WALL_SIZE,
+              WALL_HEIGHT / 2,
+              (z - MAZE_SIZE / 2) * WALL_SIZE
+            );
+            if (settings.enableShadows) {
+              wall.castShadow = true;
+              wall.receiveShadow = true;
+            }
+            scene.add(wall);
+            wallsRef.current.push(wall);
+          }
         }
       }
     }
   };
 
-  const createBrickTexture = () => {
+  const createBrickTexture = (settings: any) => {
+    const size = settings.enableEdgeSmoothing ? 128 : 64;
     const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 64;
+    canvas.width = size;
+    canvas.height = size;
     const ctx = canvas.getContext('2d')!;
     
-    // Create brick pattern
+    // Create enhanced brick pattern for higher quality
     ctx.fillStyle = '#8B4513';
-    ctx.fillRect(0, 0, 64, 64);
+    ctx.fillRect(0, 0, size, size);
     
-    ctx.fillStyle = '#A0522D';
-    ctx.fillRect(0, 0, 32, 16);
-    ctx.fillRect(32, 16, 32, 16);
-    ctx.fillRect(0, 32, 32, 16);
-    ctx.fillRect(32, 48, 32, 16);
+    if (settings.enableEdgeSmoothing) {
+      // Add more detailed brick pattern
+      ctx.fillStyle = '#A0522D';
+      for (let y = 0; y < size; y += size / 8) {
+        for (let x = 0; x < size; x += size / 4) {
+          const offset = (Math.floor(y / (size / 8)) % 2) * (size / 8);
+          ctx.fillRect(x + offset, y, size / 4 - 2, size / 8 - 2);
+        }
+      }
+      
+      // Add mortar lines
+      ctx.strokeStyle = '#654321';
+      ctx.lineWidth = 1;
+      for (let y = 0; y < size; y += size / 8) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(size, y);
+        ctx.stroke();
+      }
+    } else {
+      // Simple brick pattern for low quality
+      ctx.fillStyle = '#A0522D';
+      ctx.fillRect(0, 0, size / 2, size / 4);
+      ctx.fillRect(size / 2, size / 4, size / 2, size / 4);
+      ctx.fillRect(0, size / 2, size / 2, size / 4);
+      ctx.fillRect(size / 2, size * 3 / 4, size / 2, size / 4);
+    }
     
     const texture = new THREE.CanvasTexture(canvas);
     texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(2, 2);
+    texture.repeat.set(settings.enableEdgeSmoothing ? 3 : 2, settings.enableEdgeSmoothing ? 3 : 2);
     
     return texture;
   };
