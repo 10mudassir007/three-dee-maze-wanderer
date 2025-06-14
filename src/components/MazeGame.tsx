@@ -164,6 +164,7 @@ const MazeGame: React.FC = () => {
   const ENEMY_ATTACK_COOLDOWN = 3000;
   const RESPAWN_DELAY = 2000;
   const ENEMY_COUNT = 4;
+  const MIN_SPAWN_DISTANCE = 8; // Minimum distance for enemy spawns from player
 
   const getEnvironmentSettings = (time: TimeOfDay, weatherType: WeatherType, quality: GraphicsQuality) => {
     const timeSettings = {
@@ -335,25 +336,42 @@ const MazeGame: React.FC = () => {
     scene.add(precipitationGroup);
   };
 
+  const isValidSpawnLocation = (x: number, z: number, maze: number[][], usedPositions: Position[] = []) => {
+    // Check if position is valid (not a wall)
+    if (maze[z][x] === 1) return false;
+    
+    // Check distance from player spawn (1, 1)
+    const playerDistance = Math.sqrt(Math.pow(x - 1, 2) + Math.pow(z - 1, 2));
+    if (playerDistance < MIN_SPAWN_DISTANCE) return false;
+    
+    // Check distance from other used positions
+    for (const pos of usedPositions) {
+      const distance = Math.sqrt(Math.pow(x - pos.x, 2) + Math.pow(z - pos.z, 2));
+      if (distance < 4) return false; // Minimum 4 units between spawns
+    }
+    
+    return true;
+  };
+
   const createEnemies = (scene: THREE.Scene, maze: number[][], settings: any) => {
     const enemies: Enemy[] = [];
+    const usedPositions: Position[] = [];
     
     let enemiesCreated = 0;
     let attempts = 0;
-    const maxAttempts = 100;
+    const maxAttempts = 200;
+    
+    console.log('Creating enemies with improved spawn logic...');
     
     while (enemiesCreated < ENEMY_COUNT && attempts < maxAttempts) {
       attempts++;
       
-      let x, z;
-      do {
-        x = Math.floor(Math.random() * MAZE_SIZE);
-        z = Math.floor(Math.random() * MAZE_SIZE);
-      } while (
-        maze[z][x] === 1 ||
-        (x === 1 && z === 1) ||
-        (Math.abs(x - 1) + Math.abs(z - 1) < 5)
-      );
+      let x = Math.floor(Math.random() * MAZE_SIZE);
+      let z = Math.floor(Math.random() * MAZE_SIZE);
+      
+      if (!isValidSpawnLocation(x, z, maze, usedPositions)) {
+        continue;
+      }
 
       const enemyGeometry = new THREE.SphereGeometry(0.5, 8, 8);
       const enemyMaterial = new THREE.MeshLambertMaterial({ 
@@ -374,33 +392,26 @@ const MazeGame: React.FC = () => {
 
       scene.add(enemyMesh);
 
-      const patrolPath: Position[] = [];
-      const pathLength = 4 + Math.floor(Math.random() * 4);
+      // Create better patrol paths
+      const patrolPath: Position[] = [{ x, z }];
       
-      patrolPath.push({ x, z });
+      // Generate patrol points in different directions
+      const directions = [
+        { dx: 0, dz: -1 }, // North
+        { dx: 1, dz: 0 },  // East
+        { dx: 0, dz: 1 },  // South
+        { dx: -1, dz: 0 }  // West
+      ];
       
-      for (let j = 1; j < pathLength; j++) {
-        let validPointFound = false;
-        let px = x, pz = z;
-        let pathAttempts = 0;
+      for (let i = 0; i < 3; i++) {
+        const direction = directions[Math.floor(Math.random() * directions.length)];
+        const distance = 3 + Math.floor(Math.random() * 4);
         
-        while (!validPointFound && pathAttempts < 20) {
-          pathAttempts++;
-          
-          const direction = Math.floor(Math.random() * 4);
-          const distance = 2 + Math.floor(Math.random() * 3);
-          
-          switch (direction) {
-            case 0: pz = Math.max(0, z - distance); break;
-            case 1: px = Math.min(MAZE_SIZE - 1, x + distance); break;
-            case 2: pz = Math.min(MAZE_SIZE - 1, z + distance); break;
-            case 3: px = Math.max(0, x - distance); break;
-          }
-          
-          if (maze[pz][px] === 0) {
-            validPointFound = true;
-            patrolPath.push({ x: px, z: pz });
-          }
+        const newX = Math.max(1, Math.min(MAZE_SIZE - 2, x + direction.dx * distance));
+        const newZ = Math.max(1, Math.min(MAZE_SIZE - 2, z + direction.dz * distance));
+        
+        if (maze[newZ][newX] === 0) {
+          patrolPath.push({ x: newX, z: newZ });
         }
       }
 
@@ -415,23 +426,35 @@ const MazeGame: React.FC = () => {
         speed: ENEMY_SPEED * (0.8 + Math.random() * 0.4)
       });
       
+      usedPositions.push({ x, z });
       enemiesCreated++;
+      
+      console.log(`Enemy ${enemiesCreated} spawned at (${x}, ${z}), distance from player: ${Math.sqrt(Math.pow(x - 1, 2) + Math.pow(z - 1, 2)).toFixed(1)}`);
     }
 
-    console.log(`Created ${enemies.length} enemies`);
+    console.log(`Successfully created ${enemies.length} enemies with proper spacing`);
     enemiesRef.current = enemies;
   };
 
   const createCheckpoints = (scene: THREE.Scene, maze: number[][], settings: any) => {
     const checkpoints: Checkpoint[] = [];
     const checkpointCount = 3;
+    const usedPositions: Position[] = [{ x: 1, z: 1 }]; // Include player spawn
 
     for (let i = 0; i < checkpointCount; i++) {
       let x, z;
+      let attempts = 0;
+      
       do {
         x = Math.floor(Math.random() * MAZE_SIZE);
         z = Math.floor(Math.random() * MAZE_SIZE);
-      } while (maze[z][x] === 1 || (x === 1 && z === 1));
+        attempts++;
+      } while ((maze[z][x] === 1 || !isValidSpawnLocation(x, z, maze, usedPositions)) && attempts < 100);
+
+      if (attempts >= 100) {
+        console.warn(`Could not find valid position for checkpoint ${i}`);
+        continue;
+      }
 
       const checkpointGeometry = new THREE.CylinderGeometry(0.8, 0.8, 0.2, 16);
       const checkpointMaterial = new THREE.MeshLambertMaterial({ 
@@ -457,6 +480,9 @@ const MazeGame: React.FC = () => {
         mesh: checkpointMesh,
         activated: false
       });
+      
+      usedPositions.push({ x, z });
+      console.log(`Checkpoint ${i + 1} placed at (${x}, ${z})`);
     }
 
     checkpointsRef.current = checkpoints;
@@ -528,10 +554,14 @@ const MazeGame: React.FC = () => {
     
     respawnTimerRef.current = window.setTimeout(() => {
       if (cameraRef.current) {
+        // Add slight offset to avoid spawning exactly on checkpoint
+        const offsetX = (Math.random() - 0.5) * 0.5;
+        const offsetZ = (Math.random() - 0.5) * 0.5;
+        
         cameraRef.current.position.set(
-          (currentCheckpoint.x - MAZE_SIZE / 2) * WALL_SIZE,
+          (currentCheckpoint.x - MAZE_SIZE / 2) * WALL_SIZE + offsetX,
           1.6,
-          (currentCheckpoint.z - MAZE_SIZE / 2) * WALL_SIZE
+          (currentCheckpoint.z - MAZE_SIZE / 2) * WALL_SIZE + offsetZ
         );
         playerPositionRef.current = { ...currentCheckpoint };
         setIsRespawning(false);
@@ -652,6 +682,7 @@ const MazeGame: React.FC = () => {
     const controls = new PointerLockControls(camera, renderer.domElement);
     controlsRef.current = controls;
 
+    // Improved key handling for both WASD and arrow keys
     const onKeyDown = (event: KeyboardEvent) => {
       switch (event.code) {
         case 'KeyW':
@@ -742,7 +773,7 @@ const MazeGame: React.FC = () => {
     };
     animate();
 
-    toast.success("Enhanced Maze Game loaded! Survive and collect checkpoints!");
+    toast.success("Enhanced Maze Game loaded! Use WASD or Arrow keys to move!");
 
     return () => {
       document.removeEventListener('keydown', onKeyDown);
@@ -1083,6 +1114,7 @@ const MazeGame: React.FC = () => {
             <span className="font-bold text-yellow-400">Score: {score}</span>
           </div>
           <p>Find the red exit marker!</p>
+          <p className="text-sm">Use WASD or Arrow keys to move</p>
           <p className="text-sm">Press ESC to unlock mouse</p>
           <div className="text-xs mt-1 space-y-1">
             <p>Quality: {graphicsQuality}</p>
