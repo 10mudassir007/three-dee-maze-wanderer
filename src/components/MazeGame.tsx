@@ -31,9 +31,74 @@ type GraphicsQuality = 'low' | 'medium' | 'high';
 type TimeOfDay = 'day' | 'night' | 'sunset' | 'dawn';
 type WeatherType = 'sunny' | 'cloudy' | 'rainy' | 'snowy';
 
-// Custom EventDispatcher events for PointerLockControls
-interface PointerLockControlsEvent {
-  type: string;
+// Fixed PointerLockControls implementation
+class PointerLockControls extends THREE.EventDispatcher {
+  camera: THREE.Camera;
+  domElement: HTMLElement;
+  isLocked: boolean = false;
+  euler = new THREE.Euler(0, 0, 0, 'YXZ');
+  vec = new THREE.Vector3();
+  minPolarAngle = 0;
+  maxPolarAngle = Math.PI;
+
+  constructor(camera: THREE.Camera, domElement: HTMLElement) {
+    super();
+    this.camera = camera;
+    this.domElement = domElement;
+
+    this.onMouseMove = this.onMouseMove.bind(this);
+    this.onPointerlockChange = this.onPointerlockChange.bind(this);
+    this.onPointerlockError = this.onPointerlockError.bind(this);
+
+    this.connect();
+  }
+
+  onMouseMove(event: MouseEvent) {
+    if (!this.isLocked) return;
+
+    const movementX = event.movementX || 0;
+    const movementY = event.movementY || 0;
+
+    this.euler.setFromQuaternion(this.camera.quaternion);
+    this.euler.y -= movementX * 0.002;
+    this.euler.x -= movementY * 0.002;
+    this.euler.x = Math.max(Math.PI / 2 - this.maxPolarAngle, Math.min(Math.PI / 2 - this.minPolarAngle, this.euler.x));
+    this.camera.quaternion.setFromEuler(this.euler);
+  }
+
+  onPointerlockChange() {
+    if (this.domElement.ownerDocument.pointerLockElement === this.domElement) {
+      this.dispatchEvent({ type: 'lock' });
+      this.isLocked = true;
+    } else {
+      this.dispatchEvent({ type: 'unlock' });
+      this.isLocked = false;
+    }
+  }
+
+  onPointerlockError() {
+    console.error('Unable to use Pointer Lock API');
+  }
+
+  connect() {
+    this.domElement.ownerDocument.addEventListener('mousemove', this.onMouseMove);
+    this.domElement.ownerDocument.addEventListener('pointerlockchange', this.onPointerlockChange);
+    this.domElement.ownerDocument.addEventListener('pointerlockerror', this.onPointerlockError);
+  }
+
+  disconnect() {
+    this.domElement.ownerDocument.removeEventListener('mousemove', this.onMouseMove);
+    this.domElement.ownerDocument.removeEventListener('pointerlockchange', this.onPointerlockChange);
+    this.domElement.ownerDocument.removeEventListener('pointerlockerror', this.onPointerlockError);
+  }
+
+  lock() {
+    this.domElement.requestPointerLock();
+  }
+
+  unlock() {
+    this.domElement.ownerDocument.exitPointerLock();
+  }
 }
 
 const MazeGame: React.FC = () => {
@@ -42,12 +107,13 @@ const MazeGame: React.FC = () => {
   const [gameOver, setGameOver] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [graphicsQuality, setGraphicsQuality] = useState<GraphicsQuality>('low');
+  const [graphicsQuality, setGraphicsQuality] = useState<GraphicsQuality>('medium');
   const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>('day');
   const [weather, setWeather] = useState<WeatherType>('sunny');
   const [lives, setLives] = useState(3);
   const [currentCheckpoint, setCurrentCheckpoint] = useState<Position>({ x: 1, z: 1 });
   const [isRespawning, setIsRespawning] = useState(false);
+  const [score, setScore] = useState(0);
   
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -75,7 +141,7 @@ const MazeGame: React.FC = () => {
   const ENEMY_ATTACK_RANGE = 2;
   const ENEMY_ATTACK_COOLDOWN = 3000;
   const RESPAWN_DELAY = 2000;
-  const ENEMY_COUNT = 4; // Fixed number of enemies (3-5)
+  const ENEMY_COUNT = 4;
 
   const getEnvironmentSettings = (time: TimeOfDay, weatherType: WeatherType, quality: GraphicsQuality) => {
     const timeSettings = {
@@ -153,8 +219,6 @@ const MazeGame: React.FC = () => {
           antialias: false,
           shadowMapType: THREE.BasicShadowMap,
           fogFar: 30,
-          ambientIntensity: 0.6,
-          directionalIntensity: 0.8,
           enableShadows: false,
           wallSegments: 1,
           enableEdgeSmoothing: false,
@@ -166,8 +230,6 @@ const MazeGame: React.FC = () => {
           antialias: true,
           shadowMapType: THREE.PCFShadowMap,
           fogFar: 40,
-          ambientIntensity: 0.4,
-          directionalIntensity: 0.9,
           enableShadows: true,
           wallSegments: 2,
           enableEdgeSmoothing: true,
@@ -179,8 +241,6 @@ const MazeGame: React.FC = () => {
           antialias: true,
           shadowMapType: THREE.PCFSoftShadowMap,
           fogFar: 50,
-          ambientIntensity: 0.3,
-          directionalIntensity: 1.0,
           enableShadows: true,
           wallSegments: 4,
           enableEdgeSmoothing: true,
@@ -256,10 +316,7 @@ const MazeGame: React.FC = () => {
   const createEnemies = (scene: THREE.Scene, maze: number[][], settings: any) => {
     const enemies: Enemy[] = [];
     
-    // Create exactly ENEMY_COUNT enemies instead of percentage-based
     let enemiesCreated = 0;
-    
-    // Try to place enemies with a maximum number of attempts to prevent infinite loops
     let attempts = 0;
     const maxAttempts = 100;
     
@@ -271,9 +328,9 @@ const MazeGame: React.FC = () => {
         x = Math.floor(Math.random() * MAZE_SIZE);
         z = Math.floor(Math.random() * MAZE_SIZE);
       } while (
-        maze[z][x] === 1 || // Don't spawn on walls
-        (x === 1 && z === 1) || // Don't spawn at start
-        (Math.abs(x - 1) + Math.abs(z - 1) < 5) // Keep away from starting area
+        maze[z][x] === 1 ||
+        (x === 1 && z === 1) ||
+        (Math.abs(x - 1) + Math.abs(z - 1) < 5)
       );
 
       const enemyGeometry = new THREE.SphereGeometry(0.5, 8, 8);
@@ -295,14 +352,11 @@ const MazeGame: React.FC = () => {
 
       scene.add(enemyMesh);
 
-      // Create a larger patrol path for more movement
       const patrolPath: Position[] = [];
-      const pathLength = 4 + Math.floor(Math.random() * 4); // 4-7 points
+      const pathLength = 4 + Math.floor(Math.random() * 4);
       
-      // Start with the spawn position
       patrolPath.push({ x, z });
       
-      // Add path points in valid positions (non-wall areas)
       for (let j = 1; j < pathLength; j++) {
         let validPointFound = false;
         let px = x, pz = z;
@@ -311,18 +365,16 @@ const MazeGame: React.FC = () => {
         while (!validPointFound && pathAttempts < 20) {
           pathAttempts++;
           
-          // Try to find a position a few steps away
-          const direction = Math.floor(Math.random() * 4); // 0: up, 1: right, 2: down, 3: left
-          const distance = 2 + Math.floor(Math.random() * 3); // 2-4 steps
+          const direction = Math.floor(Math.random() * 4);
+          const distance = 2 + Math.floor(Math.random() * 3);
           
           switch (direction) {
-            case 0: pz = Math.max(0, z - distance); break; // up
-            case 1: px = Math.min(MAZE_SIZE - 1, x + distance); break; // right
-            case 2: pz = Math.min(MAZE_SIZE - 1, z + distance); break; // down
-            case 3: px = Math.max(0, x - distance); break; // left
+            case 0: pz = Math.max(0, z - distance); break;
+            case 1: px = Math.min(MAZE_SIZE - 1, x + distance); break;
+            case 2: pz = Math.min(MAZE_SIZE - 1, z + distance); break;
+            case 3: px = Math.max(0, x - distance); break;
           }
           
-          // Check if position is valid (not a wall)
           if (maze[pz][px] === 0) {
             validPointFound = true;
             patrolPath.push({ x: px, z: pz });
@@ -338,7 +390,7 @@ const MazeGame: React.FC = () => {
         lastAttack: 0,
         patrolPath,
         currentPathIndex: 0,
-        speed: ENEMY_SPEED * (0.8 + Math.random() * 0.4) // Slightly randomized speed
+        speed: ENEMY_SPEED * (0.8 + Math.random() * 0.4)
       });
       
       enemiesCreated++;
@@ -357,7 +409,7 @@ const MazeGame: React.FC = () => {
       do {
         x = Math.floor(Math.random() * MAZE_SIZE);
         z = Math.floor(Math.random() * MAZE_SIZE);
-      } while (maze[z][x] === 1 || (x === 1 && z === 1)); // Don't spawn on walls or start position
+      } while (maze[z][x] === 1 || (x === 1 && z === 1));
 
       const checkpointGeometry = new THREE.CylinderGeometry(0.8, 0.8, 0.2, 16);
       const checkpointMaterial = new THREE.MeshLambertMaterial({ 
@@ -395,7 +447,6 @@ const MazeGame: React.FC = () => {
     const playerPos = playerPositionRef.current;
 
     enemiesRef.current.forEach(enemy => {
-      // Update patrol movement
       if (enemy.patrolPath.length > 0) {
         const targetPos = enemy.patrolPath[enemy.currentPathIndex];
         const dx = (targetPos.x - MAZE_SIZE / 2) * WALL_SIZE - enemy.mesh.position.x;
@@ -403,14 +454,11 @@ const MazeGame: React.FC = () => {
         const distance = Math.sqrt(dx * dx + dz * dz);
 
         if (distance < 0.2) {
-          // Reached target point, move to next point in patrol path
           enemy.currentPathIndex = (enemy.currentPathIndex + 1) % enemy.patrolPath.length;
         } else {
-          // Move toward target point
           enemy.mesh.position.x += (dx / distance) * enemy.speed;
           enemy.mesh.position.z += (dz / distance) * enemy.speed;
           
-          // Update stored position
           enemy.position = {
             x: Math.round((enemy.mesh.position.x + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE),
             z: Math.round((enemy.mesh.position.z + MAZE_SIZE * WALL_SIZE / 2) / WALL_SIZE)
@@ -418,7 +466,6 @@ const MazeGame: React.FC = () => {
         }
       }
 
-      // Check for player attack - only if not currently respawning
       if (!isRespawning) {
         const playerDistance = Math.sqrt(
           Math.pow(playerPos.x - enemy.position.x, 2) + 
@@ -453,12 +500,10 @@ const MazeGame: React.FC = () => {
     
     setIsRespawning(true);
     
-    // Clear any existing respawn timer
     if (respawnTimerRef.current) {
       window.clearTimeout(respawnTimerRef.current);
     }
     
-    // Set new respawn timer
     respawnTimerRef.current = window.setTimeout(() => {
       if (cameraRef.current) {
         cameraRef.current.position.set(
@@ -487,11 +532,12 @@ const MazeGame: React.FC = () => {
         if (distance < 2) {
           checkpoint.activated = true;
           setCurrentCheckpoint(checkpoint.position);
+          setScore(prev => prev + 100);
           checkpoint.mesh.material = new THREE.MeshLambertMaterial({ 
             color: 0xffff00,
             emissive: 0x444400
           });
-          toast.success("Checkpoint activated!");
+          toast.success("Checkpoint activated! +100 points");
         }
       }
     });
@@ -502,13 +548,11 @@ const MazeGame: React.FC = () => {
 
     const settings = getEnvironmentSettings(timeOfDay, weather, graphicsQuality);
 
-    // Initialize Three.js scene
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(settings.skyColor);
     scene.fog = new THREE.Fog(settings.fogColor, settings.fogNear, settings.fogFar * settings.fogDensity);
     sceneRef.current = scene;
 
-    // Camera setup
     const camera = new THREE.PerspectiveCamera(
       75,
       window.innerWidth / window.innerHeight,
@@ -518,7 +562,6 @@ const MazeGame: React.FC = () => {
     camera.position.set(WALL_SIZE, 1.6, WALL_SIZE);
     cameraRef.current = camera;
 
-    // Renderer setup
     const renderer = new THREE.WebGLRenderer({ antialias: settings.antialias });
     renderer.setSize(window.innerWidth, window.innerHeight);
     if (settings.enableShadows) {
@@ -528,7 +571,6 @@ const MazeGame: React.FC = () => {
     rendererRef.current = renderer;
     mountRef.current.appendChild(renderer.domElement);
 
-    // Lighting with names for easy updates
     const ambientLight = new THREE.AmbientLight(0x404040, settings.ambientIntensity);
     ambientLight.name = 'ambientLight';
     scene.add(ambientLight);
@@ -550,7 +592,6 @@ const MazeGame: React.FC = () => {
     }
     scene.add(directionalLight);
 
-    // Generate maze
     const mazeGenerator = new MazeGenerator(MAZE_SIZE, MAZE_SIZE);
     const maze = mazeGenerator.generate();
     mazeRef.current = maze;
@@ -565,17 +606,11 @@ const MazeGame: React.FC = () => {
       }
     }
 
-    // Create maze walls and floor
     createMaze(scene, maze, settings);
-
-    // Create exit marker
     createExitMarker(scene, settings);
-
-    // Create enemies and checkpoints
     createEnemies(scene, maze, settings);
     createCheckpoints(scene, maze, settings);
 
-    // Ground with name for easy updates
     const groundGeometry = new THREE.PlaneGeometry(MAZE_SIZE * WALL_SIZE, MAZE_SIZE * WALL_SIZE);
     const groundMaterial = new THREE.MeshLambertMaterial({ color: settings.groundColor });
     const ground = new THREE.Mesh(groundGeometry, groundMaterial);
@@ -590,14 +625,11 @@ const MazeGame: React.FC = () => {
       createGrass(scene, maze, settings);
     }
 
-    // Handle precipitation
     handlePrecipitation(scene, settings);
 
-    // PointerLockControls
     const controls = new PointerLockControls(camera, renderer.domElement);
     controlsRef.current = controls;
 
-    // Event listeners
     const onKeyDown = (event: KeyboardEvent) => {
       switch (event.code) {
         case 'KeyW':
@@ -658,7 +690,6 @@ const MazeGame: React.FC = () => {
     controls.addEventListener('lock', onLock);
     controls.addEventListener('unlock', onUnlock);
 
-    // Animation loop
     const animate = () => {
       requestAnimationFrame(animate);
 
@@ -689,7 +720,7 @@ const MazeGame: React.FC = () => {
     };
     animate();
 
-    toast.success("Maze loaded! Avoid enemies and find checkpoints!");
+    toast.success("Enhanced Maze Game loaded! Survive and collect checkpoints!");
 
     return () => {
       document.removeEventListener('keydown', onKeyDown);
@@ -956,7 +987,9 @@ const MazeGame: React.FC = () => {
 
     if (distance < 1.5 && !gameWon) {
       setGameWon(true);
-      toast.success("Congratulations! You've escaped the maze!");
+      const finalScore = score + (lives * 50);
+      setScore(finalScore);
+      toast.success(`Congratulations! You've escaped the maze! Final Score: ${finalScore}`);
     }
   };
 
@@ -970,6 +1003,7 @@ const MazeGame: React.FC = () => {
     setGameWon(false);
     setGameOver(false);
     setLives(3);
+    setScore(0);
     setCurrentCheckpoint({ x: 1, z: 1 });
     setIsRespawning(false);
     
@@ -978,7 +1012,6 @@ const MazeGame: React.FC = () => {
       playerPositionRef.current = { x: 1, z: 1 };
     }
     
-    // Reset checkpoints
     checkpointsRef.current.forEach(checkpoint => {
       checkpoint.activated = false;
       checkpoint.mesh.material = new THREE.MeshLambertMaterial({ 
@@ -1018,12 +1051,14 @@ const MazeGame: React.FC = () => {
     <div className="relative w-full h-screen">
       <div ref={mountRef} className="w-full h-full" />
       
-      {/* Lives Display */}
       {isLocked && !gameWon && !gameOver && (
         <div className="absolute top-4 left-4 bg-black bg-opacity-50 text-white p-3 rounded">
           <div className="flex items-center gap-2 mb-2">
             <Heart className="text-red-500" size={20} />
             <span className="font-bold">Lives: {lives}</span>
+          </div>
+          <div className="mb-2">
+            <span className="font-bold text-yellow-400">Score: {score}</span>
           </div>
           <p>Find the red exit marker!</p>
           <p className="text-sm">Press ESC to unlock mouse</p>
@@ -1045,7 +1080,6 @@ const MazeGame: React.FC = () => {
         </div>
       )}
 
-      {/* Settings Button */}
       {isLocked && !gameWon && !gameOver && (
         <button
           onClick={() => setShowSettings(!showSettings)}
@@ -1055,7 +1089,6 @@ const MazeGame: React.FC = () => {
         </button>
       )}
 
-      {/* Settings Panel */}
       {showSettings && isLocked && !gameWon && !gameOver && (
         <div className="absolute top-16 right-4 bg-black bg-opacity-80 text-white p-4 rounded">
           <h3 className="text-lg font-bold mb-3">Game Settings</h3>
@@ -1130,14 +1163,14 @@ const MazeGame: React.FC = () => {
       {!isLocked && !gameWon && !gameOver && (
         <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
           <div className="bg-white p-8 rounded-lg text-center max-w-md">
-            <h2 className="text-2xl font-bold mb-4">3D Maze Survival Game</h2>
-            <p className="mb-4">Navigate through the maze, avoid enemies, and reach the red exit marker!</p>
+            <h2 className="text-2xl font-bold mb-4">Enhanced 3D Maze Survival</h2>
+            <p className="mb-4">Navigate through the maze, avoid enemies, collect checkpoints, and reach the red exit marker!</p>
             <p className="mb-4 text-sm text-gray-600">
-              Use WASD or arrow keys to move, mouse to look around. Find green checkpoints to save your progress!
+              Use WASD or arrow keys to move, mouse to look around. Find green checkpoints for points and safe respawn locations!
             </p>
             <div className="mb-4 flex items-center justify-center gap-2">
               <Heart className="text-red-500" size={20} />
-              <span className="font-bold">3 Lives</span>
+              <span className="font-bold">3 Lives • Score System</span>
             </div>
             <div className="mb-4 space-y-4">
               <div>
@@ -1148,7 +1181,7 @@ const MazeGame: React.FC = () => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="low">Low (Best Performance)</SelectItem>
-                    <SelectItem value="medium">Medium (Balanced)</SelectItem>
+                    <SelectItem value="medium">Medium (Recommended)</SelectItem>
                     <SelectItem value="high">High (Best Quality)</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1208,7 +1241,7 @@ const MazeGame: React.FC = () => {
               onClick={startGame}
               className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold"
             >
-              Start Survival Game
+              Start Enhanced Game
             </button>
           </div>
         </div>
@@ -1217,8 +1250,9 @@ const MazeGame: React.FC = () => {
       {gameWon && (
         <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
           <div className="bg-white p-8 rounded-lg text-center">
-            <h2 className="text-3xl font-bold mb-4 text-green-600">You Won!</h2>
-            <p className="mb-6">Congratulations on surviving the maze and reaching the exit!</p>
+            <h2 className="text-3xl font-bold mb-4 text-green-600">Victory!</h2>
+            <p className="mb-4">Congratulations on surviving the maze and reaching the exit!</p>
+            <p className="mb-6 text-xl font-bold text-blue-600">Final Score: {score}</p>
             <button
               onClick={resetGame}
               className="bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-lg font-semibold"
@@ -1233,7 +1267,8 @@ const MazeGame: React.FC = () => {
         <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
           <div className="bg-white p-8 rounded-lg text-center">
             <h2 className="text-3xl font-bold mb-4 text-red-600">Game Over!</h2>
-            <p className="mb-6">You ran out of lives! The enemies were too strong this time.</p>
+            <p className="mb-4">You ran out of lives! The enemies were too strong this time.</p>
+            <p className="mb-6 text-xl font-bold text-blue-600">Final Score: {score}</p>
             <button
               onClick={resetGame}
               className="bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg font-semibold"
@@ -1246,75 +1281,5 @@ const MazeGame: React.FC = () => {
     </div>
   );
 };
-
-// Fixed PointerLockControls implementation that properly extends EventDispatcher
-class PointerLockControls extends THREE.EventDispatcher {
-  camera: THREE.Camera;
-  domElement: HTMLElement;
-  isLocked: boolean = false;
-  euler = new THREE.Euler(0, 0, 0, 'YXZ');
-  vec = new THREE.Vector3();
-  minPolarAngle = 0;
-  maxPolarAngle = Math.PI;
-
-  constructor(camera: THREE.Camera, domElement: HTMLElement) {
-    super();
-    this.camera = camera;
-    this.domElement = domElement;
-
-    this.onMouseMove = this.onMouseMove.bind(this);
-    this.onPointerlockChange = this.onPointerlockChange.bind(this);
-    this.onPointerlockError = this.onPointerlockError.bind(this);
-
-    this.connect();
-  }
-
-  onMouseMove(event: MouseEvent) {
-    if (!this.isLocked) return;
-
-    const movementX = event.movementX || 0;
-    const movementY = event.movementY || 0;
-
-    this.euler.setFromQuaternion(this.camera.quaternion);
-    this.euler.y -= movementX * 0.002;
-    this.euler.x -= movementY * 0.002;
-    this.euler.x = Math.max(Math.PI / 2 - this.maxPolarAngle, Math.min(Math.PI / 2 - this.minPolarAngle, this.euler.x));
-    this.camera.quaternion.setFromEuler(this.euler);
-  }
-
-  onPointerlockChange() {
-    if (this.domElement.ownerDocument.pointerLockElement === this.domElement) {
-      this.dispatchEvent({ type: 'lock' });
-      this.isLocked = true;
-    } else {
-      this.dispatchEvent({ type: 'unlock' });
-      this.isLocked = false;
-    }
-  }
-
-  onPointerlockError() {
-    console.error('Unable to use Pointer Lock API');
-  }
-
-  connect() {
-    this.domElement.ownerDocument.addEventListener('mousemove', this.onMouseMove);
-    this.domElement.ownerDocument.addEventListener('pointerlockchange', this.onPointerlockChange);
-    this.domElement.ownerDocument.addEventListener('pointerlockerror', this.onPointerlockError);
-  }
-
-  disconnect() {
-    this.domElement.ownerDocument.removeEventListener('mousemove', this.onMouseMove);
-    this.domElement.ownerDocument.removeEventListener('pointerlockchange', this.onPointerlockChange);
-    this.domElement.ownerDocument.removeEventListener('pointerlockerror', this.onPointerlockError);
-  }
-
-  lock() {
-    this.domElement.requestPointerLock();
-  }
-
-  unlock() {
-    this.domElement.ownerDocument.exitPointerLock();
-  }
-}
 
 export default MazeGame;
