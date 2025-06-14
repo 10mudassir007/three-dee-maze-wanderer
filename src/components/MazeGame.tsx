@@ -171,6 +171,7 @@ const MazeGame: React.FC = () => {
     right: false
   });
   const respawnTimerRef = useRef<number | null>(null);
+  const keysRef = useRef<Set<string>>(new Set()); // Track currently pressed keys
 
   const MAZE_SIZE = 21;
   const WALL_HEIGHT = 3;
@@ -659,7 +660,7 @@ const MazeGame: React.FC = () => {
   useEffect(() => {
     if (!mountRef.current) return;
 
-    console.log('Initializing maze game with improved movement...');
+    console.log('Initializing maze game with fixed movement...');
 
     const settings = getEnvironmentSettings(timeOfDay, weather, graphicsQuality);
 
@@ -750,28 +751,34 @@ const MazeGame: React.FC = () => {
     const controls = new PointerLockControls(camera, renderer.domElement);
     controlsRef.current = controls;
 
+    // Improved key handling with proper state management
     const onKeyDown = (event: KeyboardEvent) => {
-      // Always capture movement keys, regardless of lock state
+      // Prevent double firing for held keys
+      if (keysRef.current.has(event.code)) return;
+      
+      keysRef.current.add(event.code);
+      console.log('Key pressed:', event.code);
+
       switch (event.code) {
         case 'KeyW':
         case 'ArrowUp':
           moveStateRef.current.forward = true;
-          console.log('Key down: Forward');
+          console.log('Movement: Forward ON');
           break;
         case 'KeyA':
         case 'ArrowLeft':
           moveStateRef.current.left = true;
-          console.log('Key down: Left');
+          console.log('Movement: Left ON');
           break;
         case 'KeyS':
         case 'ArrowDown':
           moveStateRef.current.backward = true;
-          console.log('Key down: Backward');
+          console.log('Movement: Backward ON');
           break;
         case 'KeyD':
         case 'ArrowRight':
           moveStateRef.current.right = true;
-          console.log('Key down: Right');
+          console.log('Movement: Right ON');
           break;
         case 'Escape':
           if (controls.isLocked) {
@@ -782,27 +789,29 @@ const MazeGame: React.FC = () => {
     };
 
     const onKeyUp = (event: KeyboardEvent) => {
-      // Always capture key releases, regardless of lock state
+      keysRef.current.delete(event.code);
+      console.log('Key released:', event.code);
+
       switch (event.code) {
         case 'KeyW':
         case 'ArrowUp':
           moveStateRef.current.forward = false;
-          console.log('Key up: Forward stopped');
+          console.log('Movement: Forward OFF');
           break;
         case 'KeyA':
         case 'ArrowLeft':
           moveStateRef.current.left = false;
-          console.log('Key up: Left stopped');
+          console.log('Movement: Left OFF');
           break;
         case 'KeyS':
         case 'ArrowDown':
           moveStateRef.current.backward = false;
-          console.log('Key up: Backward stopped');
+          console.log('Movement: Backward OFF');
           break;
         case 'KeyD':
         case 'ArrowRight':
           moveStateRef.current.right = false;
-          console.log('Key up: Right stopped');
+          console.log('Movement: Right OFF');
           break;
       }
     };
@@ -815,9 +824,9 @@ const MazeGame: React.FC = () => {
       }
     };
 
-    // Add event listeners to window instead of document for better key handling
-    window.addEventListener('keydown', onKeyDown, false);
-    window.addEventListener('keyup', onKeyUp, false);
+    // Add event listeners to document for better key handling
+    document.addEventListener('keydown', onKeyDown, false);
+    document.addEventListener('keyup', onKeyUp, false);
     window.addEventListener('resize', onResize);
 
     const onLock = () => {
@@ -827,11 +836,12 @@ const MazeGame: React.FC = () => {
       renderer.domElement.focus();
     };
     const onUnlock = () => {
-      console.log('Pointer unlocked - movement and mouse look disabled');
+      console.log('Pointer unlocked - resetting movement state');
       setIsLocked(false);
-      // Reset movement state when unlocking
+      // Clear all movement state when unlocking
       moveStateRef.current = { forward: false, backward: false, left: false, right: false };
-      console.log('Movement state reset on unlock');
+      keysRef.current.clear();
+      console.log('All movement stopped on unlock');
     };
     
     controls.addEventListener('lock', onLock);
@@ -851,11 +861,11 @@ const MazeGame: React.FC = () => {
     };
     animate();
 
-    toast.success("Enhanced Maze Game loaded! Click to lock pointer and use mouse to look around, WASD to move!");
+    toast.success("Fixed Maze Game loaded! Click to lock pointer and use WASD to move!");
 
     return () => {
-      window.removeEventListener('keydown', onKeyDown, false);
-      window.removeEventListener('keyup', onKeyUp, false);
+      document.removeEventListener('keydown', onKeyDown, false);
+      document.removeEventListener('keyup', onKeyUp, false);
       window.removeEventListener('resize', onResize);
       
       controls.removeEventListener('lock', onLock);
@@ -1060,13 +1070,13 @@ const MazeGame: React.FC = () => {
     const camera = cameraRef.current;
     const velocity = new THREE.Vector3();
 
-    // Calculate movement direction
+    // Calculate movement direction based on current movement state
     if (moveStateRef.current.forward) velocity.z -= MOVE_SPEED;
     if (moveStateRef.current.backward) velocity.z += MOVE_SPEED;
     if (moveStateRef.current.left) velocity.x -= MOVE_SPEED;
     if (moveStateRef.current.right) velocity.x += MOVE_SPEED;
 
-    // Only move if there's input
+    // Only move if there's actual input
     if (velocity.length() > 0) {
       // Apply camera rotation to movement vector
       velocity.applyQuaternion(camera.quaternion);
@@ -1155,6 +1165,10 @@ const MazeGame: React.FC = () => {
     setCurrentCheckpoint({ x: 1, z: 1 });
     setIsRespawning(false);
     
+    // Reset movement state and keys
+    moveStateRef.current = { forward: false, backward: false, left: false, right: false };
+    keysRef.current.clear();
+    
     if (cameraRef.current) {
       cameraRef.current.position.set(WALL_SIZE, 1.6, WALL_SIZE);
       playerPositionRef.current = { x: 1, z: 1 };
@@ -1168,7 +1182,7 @@ const MazeGame: React.FC = () => {
       });
     });
     
-    toast.success("Game reset! Good luck surviving the maze!");
+    toast.success("Game reset! Movement should now work properly!");
   };
 
   const handleGraphicsChange = (quality: GraphicsQuality) => {
